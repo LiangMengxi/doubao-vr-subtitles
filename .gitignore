@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+build/
+dist/
+*.spec
+logs/
+settings.json
+artifacts/
+releases/
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+.DS_Store
+Thumbs.db
