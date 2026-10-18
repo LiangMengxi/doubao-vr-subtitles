@@ -7,7 +7,6 @@ import ctypes as C
 from ctypes import wintypes as W
 import json
 import logging
-import sys
 import os
 from pathlib import Path
 import subprocess
@@ -15,7 +14,8 @@ import time
 import winreg
 
 import psutil
-from window_source import doubao_windows, still_same_window, user32
+from app_paths import RESOURCE_DIR
+from window_source import doubao_windows, doubao_window_processes, still_same_window, user32
 
 
 def caption_candidate(windows):
@@ -113,6 +113,8 @@ def send_shortcut(shortcut):
 
 
 def running_doubao_exe():
+    for executable in doubao_window_processes().values():
+        return executable
     for proc in psutil.process_iter(["name", "exe"]):
         if (proc.info["name"] or "").lower() == "doubao.exe":
             path = proc.info["exe"]
@@ -196,7 +198,7 @@ def request_caption_close(window, frame=None):
     if frame is None:
         raise RuntimeError("字幕画面尚未准备完成，请稍后重试。")
     import cv2
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    base = RESOURCE_DIR
     reference = cv2.imread(str(base / "assets" / "caption-close.png"), cv2.IMREAD_GRAYSCALE)
     if reference is None:
         raise RuntimeError("缺少字幕关闭按钮识别图，请保留完整程序文件夹。")

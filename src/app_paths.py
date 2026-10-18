@@ -5,7 +5,8 @@ from pathlib import Path
 import sys
 import errno
 
-APP_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+APP_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parents[1]
+RESOURCE_DIR = Path(getattr(sys, '_MEIPASS', APP_DIR))
 DATA_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'DoubaoVR'
 
 

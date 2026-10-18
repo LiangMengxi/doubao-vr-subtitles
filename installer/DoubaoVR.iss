@@ -8,6 +8,9 @@
 #ifndef ReleaseDir
   #error ReleaseDir is required
 #endif
+#ifndef ApplicationSHA256
+  #error ApplicationSHA256 is required
+#endif
 
 [Setup]
 AppId={{F6AC8595-E870-5E91-9159-0B12C56E0E41}
@@ -20,7 +23,8 @@ DefaultGroupName=豆包 VR 字幕桥
 UsePreviousAppDir=yes
 DirExistsWarning=no
 UsePreviousTasks=yes
-DisableDirPage=auto
+; Keep the remembered path visible so an invalid isolated directory can be changed.
+DisableDirPage=no
 DisableWelcomePage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -41,6 +45,7 @@ RestartApplications=no
 ChangesEnvironment=no
 Uninstallable=yes
 VersionInfoVersion={#AppVersion}.0
+VersionInfoDescription=豆包 VR 字幕桥安装程序
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
@@ -107,6 +112,13 @@ var
   Target, Profile: String;
 begin
   if CurStep = ssPostInstall then begin
+    { Verify the real application before offering to launch it. }
+    if (not FileExists(ExpandConstant('{app}\DoubaoVR.exe'))) or
+       (not DirExists(ExpandConstant('{app}\_internal'))) then
+      RaiseException('主程序文件不完整，请重新下载安装包。');
+    if CompareText(GetSHA256OfFile(ExpandConstant('{app}\DoubaoVR.exe')), '{#ApplicationSHA256}') <> 0 then
+      RaiseException('主程序校验失败，已取消启动。请重新下载安装包。');
+    Log('Verified installed subtitle application SHA256: {#ApplicationSHA256}');
     Profile := ExpandConstant('{localappdata}\DoubaoVR');
     Target := AddBackslash(Profile) + 'settings.json';
     { Existing profiles always win; no settings file is shipped in the payload. }

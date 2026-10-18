@@ -2,7 +2,7 @@
 import ctypes as C
 from ctypes import wintypes as W
 from dataclasses import dataclass
-import psutil
+from pathlib import Path
 
 user32 = C.WinDLL("user32", use_last_error=True)
 CALLBACK = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
@@ -16,6 +16,49 @@ user32.GetWindowTextW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
 user32.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
 user32.GetWindowLongPtrW.argtypes = [W.HWND, C.c_int]
 user32.GetWindowLongPtrW.restype = C.c_ssize_t
+kernel32 = C.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [W.DWORD, W.BOOL, W.DWORD]
+kernel32.OpenProcess.restype = W.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, C.POINTER(W.DWORD)]
+kernel32.CloseHandle.argtypes = [W.HANDLE]
+
+
+def process_executable(pid):
+    """Query only the image path; full process enumeration can omit GUI owners."""
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        buffer = C.create_unicode_buffer(32768)
+        size = W.DWORD(len(buffer))
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, C.byref(size)):
+            return Path(buffer.value)
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def doubao_window_processes():
+    """Find Chromium GUI owners even when the client has only hidden windows."""
+    paths, found = {}, {}
+
+    @CALLBACK
+    def visit(hwnd, _):
+        cls = C.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, len(cls))
+        if not cls.value.startswith('Chrome_WidgetWin_'):
+            return True
+        pid = W.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, C.byref(pid))
+        if pid.value not in paths:
+            paths[pid.value] = process_executable(pid.value)
+        path = paths[pid.value]
+        if path and path.name.lower() == 'doubao.exe':
+            found[pid.value] = path
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found
 
 
 @dataclass(frozen=True)
@@ -42,17 +85,18 @@ class Window:
 
 
 def doubao_windows():
-    pids = set()
-    for proc in psutil.process_iter(["pid", "name"]):
-        if (proc.info["name"] or "").lower() == "doubao.exe":
-            pids.add(proc.info["pid"])
-    found = []
+    paths, found = {}, []
 
     @CALLBACK
     def visit(hwnd, _):
         pid = W.DWORD()
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
         user32.GetWindowThreadProcessId(hwnd, C.byref(pid))
-        if pid.value not in pids or not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+        if pid.value not in paths:
+            paths[pid.value] = process_executable(pid.value)
+        path = paths[pid.value]
+        if not path or path.name.lower() != 'doubao.exe':
             return True
         rect = W.RECT()
         if not user32.GetWindowRect(hwnd, C.byref(rect)):

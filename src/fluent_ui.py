@@ -3,20 +3,44 @@ import ctypes as C
 import sys
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 import winreg
 import sv_ttk
-from ui_controls import ValueSlider, rounded_points
+from ui_controls import ValueSlider, SegmentedControl, rounded_points
 from settings_view import SettingsView
 
 PALETTES = {
     'light': dict(background='#f3f3f3', card='#ffffff', border='#e5e5e5',
                   text='#1b1b1b', muted='#616161', accent='#0067c0',
-                  track='#8a8a8a', preview='#f6f6f6', focus='#1b1b1b'),
-    'dark': dict(background='#202020', card='#2b2b2b', border='#353535',
+                  track='#8a8a8a', preview='#f7f7f7', focus='#1b1b1b',
+                  accent_text='#ffffff', hover='#f0f0f0'),
+    'dark': dict(background='#202020', card='#2d2d2d', border='#3d3d3d',
                  text='#ffffff', muted='#b4b4b4', accent='#60cdff',
-                 track='#9a9a9a', preview='#242424', focus='#ffffff'),
+                 track='#9a9a9a', preview='#252525', focus='#ffffff',
+                 accent_text='#101010', hover='#383838'),
 }
 APPEARANCES = {'跟随系统': 'system', '浅色': 'light', '深色': 'dark'}
+
+
+def remove_button_focus_images(root, style, mode):
+    """Use Fluent button images without a separate focus-border state."""
+    namespace = f'::ttk::theme::sv_{mode}::I'
+    for target, element, prefix, label in (
+        ('TButton', 'BridgeButton.button', 'button', 'Button'),
+        ('Accent.TButton', 'BridgeAccentButton.button', 'button-accent', 'AccentButton'),
+    ):
+        if element not in style.element_names():
+            images = {state: root.tk.call('set', f'{namespace}({prefix}-{state})')
+                      for state in ('rest', 'dis', 'pressed', 'hover')}
+            style.element_create(element, 'image', images['rest'],
+                                 ('disabled', images['dis']),
+                                 ('pressed', images['pressed']),
+                                 ('active', images['hover']), border=4, sticky='nsew')
+        style.layout(target, [(element, {'sticky': 'nsew', 'children': [
+            (f'{label}.padding', {'sticky': 'nsew', 'children': [
+                (f'{label}.label', {'side': 'left', 'expand': True}),
+            ]}),
+        ]})])
 
 
 def system_theme():
@@ -53,6 +77,7 @@ class Appearance:
         sv_ttk.set_theme(mode, root=self.root)
         p = self.palette
         style = ttk.Style(self.root)
+        remove_button_focus_images(self.root, style, mode)
         style.configure('.', font=('Microsoft YaHei UI', 10))
         style.configure('TFrame', background=p['background'])
         style.configure('TLabel', background=p['background'], foreground=p['text'])
@@ -65,10 +90,6 @@ class Appearance:
         style.configure('CardValue.TLabel', background=p['card'], foreground=p['accent'], font=('Segoe UI Variable Display', 16, 'bold'))
         style.configure('TButton', padding=(10, 4))
         style.configure('Accent.TButton', padding=(10, 4))
-        style.configure('Step.TButton', padding=(6, 1), font=('Segoe UI', 12))
-        style.configure('Preset.Toggle.TButton', padding=(8, 2), font=('Microsoft YaHei UI', 9))
-        style.configure('Pivot.Toolbutton', padding=(8, 6), font=('Microsoft YaHei UI', 10))
-        style.map('Pivot.Toolbutton', foreground=[('selected', p['accent'])])
         style.configure('Exit.TButton', foreground='#c42b1c' if mode == 'light' else '#ff99a4')
         self.root.configure(bg=p['background'])
         self.schedule_refresh()
@@ -151,10 +172,143 @@ class Card(tk.Frame):
 
 
 class Preview(tk.Canvas):
+    """Inset well for the captured caption, drawn once and re-shaped on resize."""
+
+    def __init__(self, parent, **kwargs):
+        kwargs.setdefault('highlightthickness', 0)
+        kwargs.setdefault('borderwidth', 0)
+        super().__init__(parent, **kwargs)
+        self.palette = None
+        self.well = self.create_polygon(0, 0, 1, 1, 1, 1, smooth='raw',
+                                        splinesteps=24, fill='', outline='')
+        self.bind('<Configure>', lambda _: self.layout())
+
     def apply_palette(self, palette):
-        self.configure(bg=palette['preview'])
+        self.palette = palette
+        self.configure(bg=palette['card'])
         for item in self.find_withtag('placeholder'):
             self.itemconfigure(item, fill=palette['muted'])
+        for item in self.find_withtag('hint'):
+            self.itemconfigure(item, fill=palette['muted'])
+        self.layout()
+
+    def layout(self):
+        if not self.palette:
+            return
+        width = max(4, self.winfo_width())
+        height = max(4, self.winfo_height())
+        self.coords(self.well, *rounded_points(1, 1, width - 1, height - 1, 8))
+        self.itemconfigure(self.well, fill=self.palette['preview'],
+                           outline=self.palette['border'])
+
+
+class _PivotHandle:
+    """Small compatibility shim so existing page-focus code can target a tab."""
+
+    def __init__(self, bar, key):
+        self.bar, self.key = bar, key
+
+    def state(self, flags=()):
+        if 'selected' in flags:
+            self.bar.set_active(self.key)
+        return ()
+
+    def focus_set(self):
+        self.bar.focus_set()
+
+
+class PivotBar(tk.Canvas):
+    """WinUI-style pivot: borderless labels with an accent underline."""
+
+    HEIGHT = 32
+
+    def __init__(self, parent, appearance, items, command):
+        super().__init__(parent, height=self.HEIGHT, highlightthickness=0,
+                         borderwidth=0, takefocus=True)
+        self.appearance = appearance
+        self.items = list(items)
+        self.command = command
+        self.palette = None
+        self.active = self.items[0][0]
+        self.hover = None
+        self.font = tkfont.Font(family='Microsoft YaHei UI', size=10)
+        self.boxes = {}
+        self.buttons = {key: _PivotHandle(self, key) for key, _ in self.items}
+        self.bind('<Configure>', lambda _: self.redraw())
+        self.bind('<Button-1>', self.click)
+        self.bind('<Motion>', self.motion)
+        self.bind('<Leave>', lambda _: self.set_hover(None))
+        self.bind('<Left>', lambda _: self.step(-1))
+        self.bind('<Right>', lambda _: self.step(1))
+        self.bind('<space>', lambda _: self.activate(self.active))
+        appearance.register(self)
+
+    def apply_palette(self, palette):
+        self.palette = palette
+        self.configure(bg=palette['background'])
+        self.redraw()
+
+    def set_active(self, key):
+        if key != self.active:
+            self.active = key
+            self.redraw()
+
+    def activate(self, key):
+        if key == self.active:
+            return
+        self.active = key
+        self.redraw()
+        self.command(key)
+
+    def key_at(self, x):
+        for key, (x1, _, x2, _) in self.boxes.items():
+            if x1 <= x <= x2:
+                return key
+        return None
+
+    def motion(self, event):
+        key = self.key_at(event.x)
+        self.configure(cursor='hand2' if key else '')
+        self.set_hover(key)
+
+    def set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.redraw()
+
+    def click(self, event):
+        key = self.key_at(event.x)
+        if key:
+            self.focus_set()
+            self.activate(key)
+
+    def step(self, delta):
+        keys = [key for key, _ in self.items]
+        self.activate(keys[(keys.index(self.active) + delta) % len(keys)])
+        return 'break'
+
+    def redraw(self):
+        if not self.palette:
+            return
+        palette = self.palette
+        self.delete('all')
+        self.boxes = {}
+        x = 2
+        for key, label in self.items:
+            width = self.font.measure(label)
+            active = key == self.active
+            if active:
+                color = palette['text']
+            else:
+                color = palette['text'] if self.hover == key else palette['muted']
+            self.create_text(x, 11, text=label, anchor='w', fill=color, font=self.font)
+            self.boxes[key] = (x - 8, 1, x + width + 8, 29)
+            if active:
+                self.create_polygon(*rounded_points(x, 25, x + width, 28, 1.5),
+                                    smooth='raw', splinesteps=12,
+                                    fill=palette['accent'], outline=palette['accent'])
+            x += width + 30
+
 
 
 def cache_page_focus(app):
@@ -202,12 +356,11 @@ def build_ui(app, limits, preference):
     title.pack(side='left')
     ttk.Label(title, text='豆包 VR 字幕桥', style='Title.TLabel').pack(anchor='w')
     ttk.Label(title, text='豆包实时字幕 · SteamVR', style='Muted.TLabel').pack(anchor='w', pady=(2, 0))
-    selected = next(label for label, value in APPEARANCES.items() if value == app.appearance.preference)
-    app.appearance_choice = tk.StringVar(value=selected)
-    chooser = ttk.Combobox(header, textvariable=app.appearance_choice,
-                           values=list(APPEARANCES), width=8, state='readonly')
-    chooser.pack(side='right', anchor='n', pady=8)
-    chooser.bind('<<ComboboxSelected>>', app.change_appearance)
+    options = [(value, label) for label, value in APPEARANCES.items()]
+    app.appearance_control = SegmentedControl(header, options, command=app.change_appearance)
+    app.appearance_control.select(app.appearance.preference)
+    app.appearance_control.pack(side='right', anchor='n', pady=7)
+    app.appearance.register(app.appearance_control)
 
     connection = Card(outer, app.appearance, padding=(12, 10))
     connection.pack(fill='x')
@@ -224,28 +377,27 @@ def build_ui(app, limits, preference):
     app.preview = Preview(body, height=82, highlightthickness=0, borderwidth=0)
     app.preview.pack(fill='x')
     app.preview_image = app.preview.create_image(0, 0, state='hidden')
-    app.preview_placeholder = app.preview.create_text(0, 0, text='等待豆包实时字幕', tags='placeholder', font=('Microsoft YaHei UI', 10))
+    app.preview_placeholder = app.preview.create_text(
+        0, 0, text='等待豆包实时字幕\n点击上方「一键开启字幕」',
+        tags='placeholder', justify='center', font=('Microsoft YaHei UI', 10))
     app.photo = None
-    app.preview.bind('<Configure>', lambda _: app.request_preview())
+    app.preview.bind('<Configure>', lambda _: app.request_preview(), add='+')
     app.appearance.register(app.preview)
     ttk.Label(body, textvariable=app.vr_status, style='CardMuted.TLabel').pack(anchor='w', pady=(5, 0))
 
-    pivot = ttk.Frame(outer)
-    pivot.pack(fill='x', pady=(8, 6))
     app.pages = {}
-    app.page_buttons = {}
-    app.page_markers = {}
+    app.pivot = PivotBar(outer, app.appearance, [
+        ('quick', '大小与距离'),
+        ('advanced', '位置与更多设置'),
+        ('program', '程序设置'),
+    ], app.show_page)
+    app.pivot.pack(fill='x', pady=(10, 8))
     app.page_area = SettingsView(outer, app, app.appearance)
     app.page_area.pack(fill='both', expand=True)
-    for key, label in [('quick', '大小与距离'), ('advanced', '位置与更多设置'), ('program', '程序设置')]:
-        group = ttk.Frame(pivot)
-        group.pack(side='left', padx=(0, 16))
-        button = ttk.Button(group, text=label, style='Pivot.Toolbutton', command=lambda k=key: app.show_page(k))
-        button.pack()
-        marker = tk.Frame(group, height=3)
-        marker.pack(fill='x', padx=8)
-        app.page_buttons[key], app.page_markers[key] = button, marker
+    for key, _ in app.pivot.items:
         app.pages[key] = app.page_area
+    # Keep the page_buttons mapping: page-focus switching focuses a tab handle.
+    app.page_buttons = app.pivot.buttons
     app.show_page('quick')
     app.appearance.on_changed = lambda: app.show_page(app.current_page)
     app.update_labels()

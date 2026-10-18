@@ -5,8 +5,9 @@ import importlib.metadata as metadata
 from pathlib import Path
 import sys
 import zipfile
+from release_validation import validate_application
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ('windows-capture', 'openvr', 'Pillow', 'psutil', 'numpy',
             'opencv-python', 'pyinstaller', 'sv-ttk', 'pystray', 'six')
 DOCUMENTS = ('README.md', 'USAGE.md', 'RELEASE_NOTES.md',
@@ -15,13 +16,14 @@ DOCUMENTS = ('README.md', 'USAGE.md', 'RELEASE_NOTES.md',
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--app-dir', type=Path, default=ROOT / 'dist' / 'DoubaoVR')
+    version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
+    parser.add_argument('--app-dir', type=Path, default=ROOT / 'artifacts' / 'build' / version / 'DoubaoVR')
     parser.add_argument('--output', type=Path, default=ROOT / 'releases')
     args = parser.parse_args()
     app_dir = args.app_dir.resolve()
-    version = (ROOT / 'VERSION').read_text(encoding='utf-8').strip()
     if not (app_dir / 'DoubaoVR.exe').is_file() or not (app_dir / '_internal').is_dir():
-        raise SystemExit('Build dist/DoubaoVR with PyInstaller first.')
+        raise SystemExit('Run tools/build_app.py first, or supply --app-dir.')
+    validate_application(app_dir / 'DoubaoVR.exe', version)
     entries = {'DoubaoVR/DoubaoVR.exe': app_dir / 'DoubaoVR.exe'}
     for source in (app_dir / '_internal').rglob('*'):
         if source.is_file():

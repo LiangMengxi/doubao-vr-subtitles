@@ -6,8 +6,6 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
-import sys
 import time
 import threading
 import atexit
@@ -23,7 +21,7 @@ from subtitle_launcher import SubtitleLauncher, SubtitleCloser, caption_candidat
 from fluent_ui import build_ui as build_fluent_ui, APPEARANCES
 from tray_controller import TrayController
 from doubao_exit import DoubaoExitTask
-from app_paths import DATA_DIR, load_config, save_config, migrate_legacy_settings
+from app_paths import DATA_DIR, RESOURCE_DIR, load_config, save_config, migrate_legacy_settings
 
 DEFAULTS = {"width": 1.0, "distance": 1.2, "x": 0.0, "y": -0.32, "opacity": 1.0, "pitch": 0.0, "crop_top": 0}
 LIMITS = {"width": (0.25, 2.5), "distance": (0.4, 3.0), "x": (-1.2, 1.2), "y": (-1.2, 0.8), "opacity": (0.1, 1.0), "pitch": (-45, 45), "crop_top": (0, 120)}
@@ -72,7 +70,7 @@ class BridgeApp:
         self.root.geometry(f"560x{height}+{x}+30")
         self.root.minsize(520, min(650, height))
         try:
-            icon_path = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets" / "bridge.png"
+            icon_path = RESOURCE_DIR / "assets" / "bridge.png"
             self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
             self.root.iconphoto(True, self.app_icon)
         except OSError:
@@ -128,14 +126,11 @@ class BridgeApp:
 
     def show_page(self, key):
         self.current_page = key
-        p = self.appearance.palette
+        self.pivot.set_active(key)
         self.page_area.show(key)
-        for name, page in self.pages.items():
-            self.page_buttons[name].state(["selected" if name == key else "!selected"])
-            self.page_markers[name].configure(bg=p["accent"] if name == key else p["background"])
 
     def change_appearance(self, _=None):
-        self.appearance.apply(APPEARANCES[self.appearance_choice.get()])
+        self.appearance.apply(self.appearance_control.value)
         self.show_page(self.current_page)
         self.save_settings()
 
@@ -207,7 +202,7 @@ class BridgeApp:
             if self.tray is None or self.tray.error or self.tray.stopped:
                 if self.tray:
                     self.tray.stop()
-                asset_root = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+                asset_root = RESOURCE_DIR
                 self.tray = TrayController(asset_root / 'assets' / 'bridge.png')
             else:
                 self.tray.show()
@@ -388,7 +383,7 @@ class BridgeApp:
             self.preview.itemconfigure(self.preview_placeholder, state="normal")
             return
         image = Image.fromarray(self.last_rgba)
-        image.thumbnail((max(1, width - 16), max(1, height - 12)), Image.Resampling.LANCZOS)
+        image.thumbnail((max(1, width - 24), max(1, height - 18)), Image.Resampling.LANCZOS)
         if self.photo and (self.photo.width(), self.photo.height()) == image.size:
             self.photo.paste(image)
         else:
@@ -411,8 +406,11 @@ class BridgeApp:
             value = self.vars[key].get()
             if key in ("width", "opacity"):
                 var.set(f"{value * 100:.0f}%")
+            elif key in ("crop_top", "pitch"):
+                # Round first: -0.4 must read "0", never "-0".
+                var.set(f"{int(round(value))} {unit}")
             else:
-                var.set(f"{value:.0f} {unit}" if key in ("crop_top", "pitch") else f"{value:.2f} {unit}")
+                var.set(f"{value:.2f} {unit}")
         for key, preset, button in self.preset_buttons:
             button.state(['selected' if abs(self.vars[key].get() - preset) < .001 else '!selected'])
 
@@ -703,6 +701,17 @@ def main():
     # Caption-sized images do not benefit from a persistent 16-worker pool.
     # Set this before the first native conversion/template match creates it.
     cv2.setNumThreads(1)
+    from runtime_access import startup_access_error
+    access_error = startup_access_error()
+    if access_error:
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            messagebox.showerror('无法启动字幕桥', access_error, parent=root)
+        finally:
+            root.destroy()
+        return
     ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID("DoubaoVR.SubtitleBridge")
     from single_instance import SingleInstance
     instance = SingleInstance()
@@ -712,8 +721,12 @@ def main():
         return
     app = None
     try:
-        (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(DATA_DIR / "logs" / "bridge.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+        try:
+            (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(DATA_DIR / "logs" / "bridge.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+        except OSError:
+            # Logging is optional on read-only or encrypted profile folders.
+            handler = logging.StreamHandler()
         logging.basicConfig(level=logging.INFO, handlers=[handler], format="%(asctime)s %(levelname)s %(message)s")
         migrate_legacy_settings()
         root = tk.Tk()

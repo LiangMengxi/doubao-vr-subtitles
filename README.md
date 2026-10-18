@@ -4,11 +4,11 @@
 
 将豆包桌面版的实时字幕窗口直接捕获到 SteamVR 悬浮层中。豆包负责原有的识别与翻译，本程序只转发画面。无需修改豆包或 VRChat。
 
-独立的非官方项目。当前版本 **v0.2.2**，适用于 Windows x64 / SteamVR，主要用于 VRChat 等 VR 场景中的多语种交流。
+独立的非官方项目。当前版本 **v0.2.4**，适用于 Windows x64 / SteamVR，主要用于 VRChat 等 VR 场景中的多语种交流。
 
 ## 下载版快速开始
 
-从仓库的 **Releases** 下载 `DoubaoVR-v0.2.2-Setup-x64.exe` 并运行，安装后从桌面或开始菜单打开，无需安装 Python。后续安装包会自动选用上次的安装路径，覆盖更新程序并保留设置。也提供 ZIP 免安装版。
+从仓库的 **Releases** 下载 `DoubaoVR-v0.2.4-Setup-x64.exe` 并运行。安装和更新都会显示安装目录，默认沿用上次路径。安装后从桌面或开始菜单打开“豆包 VR 字幕桥”，或运行安装目录中的 `DoubaoVR.exe`，无需安装 Python。再次运行带 `Setup` 的文件会进入安装或更新流程。也提供 ZIP 免安装版。
 
 额外的识别和翻译软件只需安装并登录**豆包桌面版**；VR 显示使用已有的 **SteamVR 与头显**。无需其他语音识别或翻译工具，VRChat 也不是必需依赖。
 
@@ -64,6 +64,15 @@
 - 启动时限制 OpenCV 工作线程，并为 NumPy 默认使用单个 BLAS 线程（保留用户显式环境配置），减少无用的线程和私有内存提交；不修改系统环境变量。捕获到上传之间仍有 CPU 像素复制，并非全程 GPU 零拷贝。
 - 不读取麦克风、不上传字幕、不注入游戏进程。日志只记录连接与错误信息；日常运行不会保存字幕截图。
 
+## 工程目录
+
+- `src/`：程序源码，包括界面、字幕捕获、VR 悬浮和托盘功能。
+- `tools/`：发布打包工具。
+- `assets/`：图标与界面资源。
+- `installer/`、`licenses/`：安装器定义与第三方许可。
+- `dist/`：本机已构建的程序；`releases/`：安装包与发布文件。
+- `artifacts/`：仅本机使用的测试、诊断与备份资料，不进入发布包。
+
 ## 从源代码运行
 
 需要 Windows 10 1903 或更新版本、64 位 Python 3.12，以及支持 WGC 的图形环境。推荐使用当前 Windows 11。
@@ -71,23 +80,25 @@
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe app.py
+.\.venv\Scripts\python.exe src/app.py
 ```
 
 ## 打包
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install pyinstaller==6.20.0
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --windowed --onedir --name DoubaoVR --icon assets/bridge.ico --collect-all openvr --collect-all windows_capture --collect-all sv_ttk --add-data "assets/bridge.png;assets" --add-data "assets/bridge.ico;assets" --add-data "assets/caption-close.png;assets" app.py
+.\.venv\Scripts\python.exe tools/build_app.py
 ```
+
+构建输出位于 `artifacts/build/<版本>/DoubaoVR/`，不会覆盖正在使用的 `dist/DoubaoVR/`。构建缓存和 spec 文件也统一保存在 `artifacts/`。
 
 设置和日志保存在 `%LOCALAPPDATA%\DoubaoVR`，独立于安装目录，更新或移动程序不会清空。首次运行会从程序旁的旧版 `settings.json` 导入配置，已有用户配置始终优先保留。
 
 生成用于 Releases 的 ZIP 和 SHA256 文件：
 
 ```powershell
-.\.venv\Scripts\python.exe package_release.py
-.\.venv\Scripts\python.exe build_installer.py --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+.\.venv\Scripts\python.exe tools/package_release.py
+.\.venv\Scripts\python.exe tools/build_installer.py --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
 需要 Inno Setup 6.7 或更新版本，`--iscc` 指向其实际编译器路径。输出在 `releases/`，包含安装 EXE、可选免安装 ZIP 和各自 SHA256。安装器使用固定 AppId 和每用户安装方式，记忆原路径；只替换程序文件，不包含或删除用户配置。卸载后配置也会保留。
@@ -96,6 +107,7 @@ py -3.12 -m venv .venv
 
 ## 排错
 
+- 提示“低完整性”、捕获访问被拒绝，或安装器报注册表错误 5：检查安装位置是否为带隔离权限的开发工作区。请将发行包完整解压或安装到普通应用目录；不要修改开发环境的隔离权限。程序会检测低完整性运行环境并给出提示。这与是否具有管理员标记、是否签名是不同问题。
 - 没找到窗口：点击“一键开启字幕”，或在豆包打开实时字幕并展开字幕条后刷新。
 - 预览为空：确认选择的是字幕窗口，保持展开；检查 `logs/bridge.log`。
 - VR 连接失败：确认 SteamVR 与头显已就绪，再点击开启。

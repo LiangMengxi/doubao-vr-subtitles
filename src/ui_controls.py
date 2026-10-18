@@ -1,5 +1,6 @@
-"""Compact, keyboard-accessible slider with a persistent canvas drawing."""
+"""Compact, keyboard-accessible custom controls with persistent canvas drawings."""
 import tkinter as tk
+from tkinter import font as tkfont
 
 
 def rounded_points(x1, y1, x2, y2, radius):
@@ -30,7 +31,6 @@ class ValueSlider(tk.Canvas):
         self.fill = self.create_line(12, 14, 12, 14, fill=self.accent, width=3, capstyle="round")
         self.thumb = self.create_oval(2, 4, 22, 24, fill="#ffffff", outline="#d4d4d4", width=1)
         self.dot = self.create_oval(7, 9, 17, 19, fill=self.accent, outline='')
-        self.focus_ring = self.create_rectangle(1, 1, 179, 27, outline='#1b1b1b', state='hidden')
         self.trace = variable.trace_add("write", self.redraw)
         self.bind("<Configure>", self.redraw)
         self.bind("<Button-1>", self.choose)
@@ -40,8 +40,6 @@ class ValueSlider(tk.Canvas):
         self.bind("<MouseWheel>", lambda e: self.nudge(step if e.delta > 0 else -step))
         self.bind('<Home>', lambda _: self.set_endpoint(low))
         self.bind('<End>', lambda _: self.set_endpoint(high))
-        self.bind('<FocusIn>', lambda _: self.itemconfigure(self.focus_ring, state='normal'))
-        self.bind('<FocusOut>', lambda _: self.itemconfigure(self.focus_ring, state='hidden'))
         self.bind('<Enter>', lambda _: self.highlight(True))
         self.bind('<Leave>', lambda _: self.highlight(False))
         self.bind("<Destroy>", self.remove_trace)
@@ -53,7 +51,6 @@ class ValueSlider(tk.Canvas):
         self.itemconfigure(self.fill, fill=self.accent)
         self.itemconfigure(self.dot, fill=self.accent)
         self.itemconfigure(self.thumb, fill=palette['card'], outline=palette['border'])
-        self.itemconfigure(self.focus_ring, outline=palette['focus'])
 
     def highlight(self, active):
         if self.hovered == active:
@@ -81,7 +78,6 @@ class ValueSlider(tk.Canvas):
         x = 12 + (width - 24) * (value - self.low) / (self.high - self.low)
         if width != self.drawn_width:
             self.coords(self.track, 12, 14, width - 12, 14)
-            self.coords(self.focus_ring, 1, 1, width-1, 27)
         self.drawn_width, self.drawn_value = width, value
         self.coords(self.fill, 12, 14, x, 14)
         self.coords(self.thumb, x - 10, 4, x + 10, 24)
@@ -103,3 +99,101 @@ class ValueSlider(tk.Canvas):
     def nudge(self, amount):
         self.set_value(round(min(self.high, max(self.low, self.variable.get() + amount)), 3))
         return "break"
+
+
+class SegmentedControl(tk.Canvas):
+    """Compact Fluent segmented selector drawn on one rounded surface.
+
+    Replaces a native combobox: the current choice is visible without opening
+    anything, and the whole control stays inside the custom-drawn look.
+    """
+
+    def __init__(self, parent, options, command=None, height=28):
+        self.options = list(options)
+        self.command = command
+        self.value = self.options[0][0]
+        self.font = tkfont.Font(family='Microsoft YaHei UI', size=9)
+        self.palette = None
+        self.hover = None
+        self.widths = [self.font.measure(label) + 20 for _, label in self.options]
+        self.total = sum(self.widths) + 4
+        self.height = height
+        super().__init__(parent, width=self.total, height=height,
+                         highlightthickness=0, borderwidth=0, takefocus=True)
+        self.bind('<Configure>', lambda _: self.redraw())
+        self.bind('<Button-1>', self.click)
+        self.bind('<Motion>', self.motion)
+        self.bind('<Leave>', lambda _: self.set_hover(None))
+        self.bind('<Left>', lambda _: self.step(-1))
+        self.bind('<Right>', lambda _: self.step(1))
+
+    def apply_palette(self, palette):
+        self.palette = palette
+        self.configure(bg=palette['background'])
+        self.redraw()
+
+    def select(self, value):
+        """Show a value without notifying the command (initial state)."""
+        if value in [value for value, _ in self.options] and value != self.value:
+            self.value = value
+            self.redraw()
+
+    def set(self, value):
+        if value == self.value:
+            return
+        self.value = value
+        self.redraw()
+        if self.command:
+            self.command()
+
+    def index_at(self, x):
+        edge = 2
+        for index, width in enumerate(self.widths):
+            if edge <= x < edge + width:
+                return index
+            edge += width
+        return None
+
+    def motion(self, event):
+        index = self.index_at(event.x)
+        self.configure(cursor='hand2' if index is not None else '')
+        self.set_hover(index)
+
+    def set_hover(self, index):
+        if index != self.hover:
+            self.hover = index
+            self.redraw()
+
+    def click(self, event):
+        self.focus_set()
+        index = self.index_at(event.x)
+        if index is not None:
+            self.set(self.options[index][0])
+
+    def step(self, delta):
+        values = [value for value, _ in self.options]
+        self.set(values[(values.index(self.value) + delta) % len(values)])
+        return 'break'
+
+    def redraw(self):
+        if not self.palette:
+            return
+        palette = self.palette
+        height = self.height
+        self.delete('all')
+        self.create_polygon(*rounded_points(1, 1, self.total - 1, height - 1, 9),
+                            smooth='raw', splinesteps=24,
+                            fill=palette['card'], outline=palette['border'])
+        edge = 2
+        for index, (value, label) in enumerate(self.options):
+            width = self.widths[index]
+            x1, x2 = edge + 2, edge + width - 2
+            if value == self.value:
+                self.create_polygon(*rounded_points(x1, 3, x2, height - 3, 7),
+                                    smooth='raw', splinesteps=24,
+                                    fill=palette['accent'], outline=palette['accent'])
+                color = palette['accent_text']
+            else:
+                color = palette['text'] if self.hover == index else palette['muted']
+            self.create_text((x1 + x2) / 2, height / 2, text=label, fill=color, font=self.font)
+            edge += width
