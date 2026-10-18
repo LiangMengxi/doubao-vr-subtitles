@@ -2,6 +2,22 @@
 import tkinter as tk
 
 
+def rounded_points(x1, y1, x2, y2, radius):
+    """Cubic Bezier path with true circular corners for Canvas smooth='raw'."""
+    r = max(0, min(radius, (x2-x1)/2, (y2-y1)/2))
+    k = r * .5522847498
+    points = [(x1+r,y1),
+              (x1+r,y1),(x2-r,y1),(x2-r,y1),
+              (x2-r+k,y1),(x2,y1+r-k),(x2,y1+r),
+              (x2,y1+r),(x2,y2-r),(x2,y2-r),
+              (x2,y2-r+k),(x2-r+k,y2),(x2-r,y2),
+              (x2-r,y2),(x1+r,y2),(x1+r,y2),
+              (x1+r-k,y2),(x1,y2-r+k),(x1,y2-r),
+              (x1,y2-r),(x1,y1+r),(x1,y1+r),
+              (x1,y1+r-k),(x1+r-k,y1),(x1+r,y1)]
+    return [coordinate for point in points for coordinate in point]
+
+
 class ValueSlider(tk.Canvas):
     def __init__(self, parent, variable, low, high, step=0.05):
         super().__init__(parent, height=28, width=180, bg="#ffffff", highlightthickness=0, takefocus=True)

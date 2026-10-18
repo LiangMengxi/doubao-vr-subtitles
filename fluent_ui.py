@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 import winreg
 import sv_ttk
-from ui_controls import ValueSlider
+from ui_controls import ValueSlider, rounded_points
 from settings_view import SettingsView
 
 PALETTES = {
@@ -128,7 +128,7 @@ class Card(tk.Frame):
         super().__init__(parent, borderwidth=0, highlightthickness=0)
         self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, takefocus=False)
         self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
-        self.shape = self.canvas.create_polygon(0, 0, 1, 0, 1, 1, smooth=True, splinesteps=24, width=1)
+        self.shape = self.canvas.create_polygon(*rounded_points(0,0,1,1,0), smooth='raw', splinesteps=24, width=1)
         self.content = ttk.Frame(self, style='Surface.TFrame')
         self.content.pack(fill='both', expand=True, padx=padding[0], pady=padding[1])
         self.drawn_size = None
@@ -146,9 +146,8 @@ class Card(tk.Frame):
         if size == self.drawn_size:
             return
         self.drawn_size = size
-        w, h, r = max(2, size[0]) - 1, max(2, size[1]) - 1, 8
-        self.canvas.coords(self.shape, r, 1, w-r, 1, w, 1, w, r, w, h-r,
-                           w, h, w-r, h, r, h, 1, h, 1, h-r, 1, r, 1, 1)
+        w, h = max(2, size[0]) - 1, max(2, size[1]) - 1
+        self.canvas.coords(self.shape, *rounded_points(1,1,w,h,12))
 
 
 class Preview(tk.Canvas):

@@ -1,6 +1,7 @@
 """One buffered canvas for settings: page switches never expose partial widgets."""
 import tkinter as tk
 from tkinter import font as tkfont
+from ui_controls import rounded_points
 
 
 class SourceChoice:
@@ -72,11 +73,9 @@ class SettingsView(tk.Canvas):
         return self.create_text(x, y, text=value, anchor=anchor, fill=color or self.palette['text'],
                                 font=font or self.font, width=width)
 
-    def rounded(self, x1, y1, x2, y2, fill, outline=None, radius=7):
-        r = radius
-        return self.create_polygon(x1+r,y1,x2-r,y1,x2,y1,x2,y1+r,x2,y2-r,x2,y2,
-                                   x2-r,y2,x1+r,y2,x1,y2,x1,y2-r,x1,y1+r,x1,y1,
-                                   smooth=True,splinesteps=16,fill=fill,outline=outline or fill)
+    def rounded(self, x1, y1, x2, y2, fill, outline=None, radius=12):
+        return self.create_polygon(*rounded_points(x1,y1,x2,y2,radius),
+                                   smooth='raw',splinesteps=24,fill=fill,outline=outline or fill)
 
     def hit(self, box, kind, action):
         self.hits.append((box, kind, action))
@@ -84,7 +83,7 @@ class SettingsView(tk.Canvas):
     def button(self, box, label, action, selected=False):
         x1,y1,x2,y2 = box
         self.rounded(*box, self.palette['accent'] if selected else self.palette['card'],
-                     self.palette['accent'] if selected else self.palette['border'], radius=4)
+                     self.palette['accent'] if selected else self.palette['border'], radius=8)
         foreground = ('#ffffff' if self.appearance.mode == 'light' else '#111111') if selected else None
         self.text((x1+x2)/2,(y1+y2)/2,label,anchor='center',color=foreground)
         self.hit(box,'button',action)
