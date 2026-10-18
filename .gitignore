@@ -14,3 +14,13 @@ releases/
 *.pfx
 .DS_Store
 Thumbs.db
+
+# Local validation and development material; not part of the published source.
+/test_*.py
+/check_*.py
+/probe_*.py
+/smoke_*.py
+/observe_*.py
+/inspect_overlay.py
+/VALIDATION.md
+/assets/branding/

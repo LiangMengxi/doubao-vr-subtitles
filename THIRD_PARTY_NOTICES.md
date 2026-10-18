@@ -15,5 +15,8 @@ Windows 发布包使用以下第三方组件；相应许可文本随压缩包中
 | NumPy | https://github.com/numpy/numpy | BSD-3-Clause 及其随附第三方许可 |
 | OpenCV Python | https://github.com/opencv/opencv-python | Apache 2.0 及 LICENSE-3RD-PARTY.txt |
 | PyInstaller bootloader | https://github.com/pyinstaller/pyinstaller | 随附 COPYING.txt，包含 bootloader exception |
+| Sun Valley ttk theme | https://github.com/rdbende/Sun-Valley-ttk-theme | MIT |
+| pystray | https://github.com/moses-palmer/pystray | LGPLv3 |
+| six | https://github.com/benjaminp/six | MIT |
 
 `assets/caption-close.png` 是用于识别本机豆包字幕关闭按钮的最小模板图；豆包及其界面相关权利属于相应权利人。应用图标为本项目生成。

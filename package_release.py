@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 PACKAGES = ('windows-capture', 'openvr', 'Pillow', 'psutil', 'numpy',
-            'opencv-python', 'pyinstaller')
-DOCUMENTS = ('README.md', 'USAGE.md', 'RELEASE_NOTES.md', 'VALIDATION.md',
+            'opencv-python', 'pyinstaller', 'sv-ttk', 'pystray', 'six')
+DOCUMENTS = ('README.md', 'USAGE.md', 'RELEASE_NOTES.md',
              'THIRD_PARTY_NOTICES.md', 'VERSION')
 
 

@@ -1,4 +1,9 @@
 """Doubao VR bridge desktop controller."""
+import os
+# This app only processes image arrays, with no BLAS matrix workloads. Set the
+# process-local limit before NumPy loads, preserving any explicit user setting.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -7,8 +12,8 @@ import sys
 import time
 import threading
 import atexit
+import queue
 import tkinter as tk
-from tkinter import ttk
 
 from PIL import Image, ImageTk
 
@@ -16,7 +21,9 @@ from capture_source import WindowCapture, to_rgba
 from window_source import doubao_windows, still_same_window, user32
 from vr_overlay import SubtitleOverlay
 from subtitle_launcher import SubtitleLauncher, SubtitleCloser, caption_candidate
-from ui_controls import ValueSlider
+from fluent_ui import build_ui as build_fluent_ui, APPEARANCES, set_page_focus
+from tray_controller import TrayController
+from doubao_exit import DoubaoExitTask
 
 BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {"width": 1.0, "distance": 1.2, "x": 0.0, "y": -0.32, "opacity": 1.0, "pitch": 0.0, "crop_top": 0}
@@ -37,6 +44,26 @@ def load_settings():
     return values
 
 
+def load_appearance():
+    try:
+        choice = json.loads((BASE / 'settings.json').read_text(encoding='utf-8')).get('appearance', 'system')
+        return choice if choice in APPEARANCES.values() else 'system'
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 'system'
+
+
+def load_behavior():
+    defaults = {'minimize_to_tray': False, 'exit_close_doubao': True, 'show_capture_border': False}
+    try:
+        saved = json.loads((BASE / 'settings.json').read_text(encoding='utf-8'))
+        for key in defaults:
+            if type(saved.get(key)) is bool:
+                defaults[key] = saved[key]
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return defaults
+
+
 class BridgeApp:
     def __init__(self, root):
         self.root = root
@@ -45,7 +72,6 @@ class BridgeApp:
         x = max(10, self.root.winfo_screenwidth() - 590)
         self.root.geometry(f"560x{height}+{x}+30")
         self.root.minsize(520, min(650, height))
-        self.root.configure(bg="#111827")
         try:
             icon_path = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets" / "bridge.png"
             self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
@@ -53,6 +79,10 @@ class BridgeApp:
         except OSError:
             logging.warning("Application icon is unavailable")
         self.capture_stoppers = []
+        self.tray = None
+        self.tray_pending = False
+        self.tray_deadline = 0
+        self.exit_task = None
         self.closing = False
         self.capture = None
         self.overlay = None
@@ -60,6 +90,10 @@ class BridgeApp:
         self.windows = []
         self.last_seq = -1
         self.last_rgba = None
+        self.converted_token = None
+        self.overlay_token = None
+        self.preview_pending = True
+        self.preview_signature = None
         self.last_discovery = 0
         self.capture_started = 0
         self.dirty = True
@@ -70,6 +104,10 @@ class BridgeApp:
         self.closer = None
         self.launch_error = None
         self.vars = {k: tk.DoubleVar(value=v) for k, v in load_settings().items()}
+        behavior = load_behavior()
+        self.minimize_to_tray = tk.BooleanVar(value=behavior['minimize_to_tray'])
+        self.exit_close_doubao = tk.BooleanVar(value=behavior['exit_close_doubao'])
+        self.show_capture_border = tk.BooleanVar(value=behavior['show_capture_border'])
         self.status = tk.StringVar(value="正在查找豆包实时字幕…")
         self.vr_status = tk.StringVar(value="VR 悬浮未开启")
         self.detail = tk.StringVar(value="只捕获选中的豆包窗口")
@@ -79,124 +117,163 @@ class BridgeApp:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(150, self.discover)
         self.root.after(50, self.tick)
+        self.root.after(100, self.refresh_preview)
         self.root.after(500, self.refresh_caption_switch)
         self.root.bind("<Destroy>", self.on_root_destroy, add="+")
+        self.root.bind('<Unmap>', self.on_unmap, add='+')
+        self.root.after(150, self.poll_tray)
 
     def build_ui(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TFrame", background="#111827")
-        style.configure("TLabel", background="#111827", foreground="#e4edf8", font=("Microsoft YaHei UI", 10))
-        style.configure("Muted.TLabel", foreground="#92a6bf", font=("Microsoft YaHei UI", 9))
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 18, "bold"))
-        style.configure("Value.TLabel", foreground="#72e6cf", font=("Microsoft YaHei UI", 15, "bold"))
-        style.configure("Section.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(10, 6), background="#24344a", foreground="#e4edf8", borderwidth=0)
-        style.map("TButton", background=[("active", "#344b66"), ("disabled", "#1b283a")], foreground=[("disabled", "#687c95")])
-        style.configure("Primary.TButton", background="#137e76", foreground="#ffffff")
-        style.map("Primary.TButton", background=[("active", "#199b8f"), ("disabled", "#23504e")])
-        style.configure("Exit.TButton", background="#442b39", foreground="#ffdce5")
-        style.map("Exit.TButton", background=[("active", "#634050")])
-        style.configure("Step.TButton", padding=(10, 3), font=("Segoe UI", 13))
-        style.configure("TCombobox", padding=5)
-        style.configure("TNotebook", background="#111827", borderwidth=0, bordercolor="#2b3b52", lightcolor="#2b3b52", darkcolor="#2b3b52")
-        style.configure("TNotebook.Tab", background="#1a293c", foreground="#a9bdd4", padding=(18, 7), bordercolor="#2b3b52", lightcolor="#2b3b52", darkcolor="#2b3b52")
-        style.map("TNotebook.Tab", background=[("selected", "#244a4b")], foreground=[("selected", "#9cf2df")])
+        build_fluent_ui(self, LIMITS, load_appearance())
+        self.root.after(2000, self.refresh_appearance)
 
-        outer = ttk.Frame(self.root, padding=(20, 16))
-        outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="豆包 VR 字幕桥", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="豆包实时字幕 · SteamVR 悬浮显示", style="Muted.TLabel").pack(anchor="w", pady=(2, 10))
-        action = ttk.Frame(outer)
-        action.pack(fill="x")
-        self.launch_button = ttk.Button(action, text="一键开启字幕", style="Primary.TButton", command=self.toggle_subtitles)
-        self.launch_button.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.start_button = ttk.Button(action, text="开启 VR 悬浮", command=self.toggle_vr)
-        self.start_button.pack(side="left", fill="x", expand=True)
-        ttk.Label(outer, textvariable=self.status, wraplength=490, style="Muted.TLabel").pack(anchor="w", pady=(5, 5))
+    def show_page(self, key):
+        set_page_focus(self, key)
+        self.current_page = key
+        p = self.appearance.palette
+        self.pages[key].tkraise()
+        for name, page in self.pages.items():
+            self.page_buttons[name].state(["selected" if name == key else "!selected"])
+            self.page_markers[name].configure(bg=p["accent"] if name == key else p["background"])
 
-        self.preview = tk.Canvas(outer, height=88, bg="#0b1220", highlightthickness=1, highlightbackground="#2b3b52")
-        self.preview.pack(fill="x")
-        self.preview_image = self.preview.create_image(0, 0, state="hidden")
-        self.preview_placeholder = self.preview.create_text(0, 0, text="等待豆包字幕", fill="#92a6bf", font=("Microsoft YaHei UI", 11))
-        self.photo = None
-        self.preview.bind("<Configure>", lambda _: self.draw_preview())
-        ttk.Label(outer, textvariable=self.vr_status, style="Muted.TLabel").pack(anchor="w", pady=(5, 8))
+    def change_appearance(self, _=None):
+        self.appearance.apply(APPEARANCES[self.appearance_choice.get()])
+        self.show_page(self.current_page)
+        self.save_settings()
 
-        notebook = ttk.Notebook(outer)
-        notebook.pack(fill="both", expand=True)
-        quick = ttk.Frame(notebook, padding=(4, 6))
-        advanced = ttk.Frame(notebook, padding=(4, 6))
-        notebook.add(quick, text="大小与距离")
-        notebook.add(advanced, text="位置与更多设置")
-        self.value_labels = {}
-        for key, title, unit, step, presets in [
-            ("width", "字幕大小", "%", 0.05, [("小字幕", 0.7), ("标准", 1.0), ("大字幕", 1.4)]),
-            ("distance", "前方距离", "米", 0.1, [("近 · 0.8 米", 0.8), ("适中 · 1.2 米", 1.2), ("远 · 1.8 米", 1.8)]),
-        ]:
-            block = ttk.Frame(quick)
-            block.pack(fill="x", pady=(2, 12))
-            heading = ttk.Frame(block)
-            heading.pack(fill="x")
-            ttk.Label(heading, text=title, style="Section.TLabel").pack(side="left")
-            value = tk.StringVar()
-            self.value_labels[key] = (value, unit)
-            ttk.Label(heading, textvariable=value, style="Value.TLabel").pack(side="right")
-            row = ttk.Frame(block)
-            row.pack(fill="x", pady=(3, 5))
-            ttk.Button(row, text="−", width=2, style="Step.TButton", command=lambda k=key, s=step: self.adjust(k, -s)).pack(side="left")
-            ValueSlider(row, self.vars[key], *LIMITS[key], step=step).pack(side="left", fill="x", expand=True, padx=10)
-            ttk.Button(row, text="+", width=2, style="Step.TButton", command=lambda k=key, s=step: self.adjust(k, s)).pack(side="right")
-            choices = ttk.Frame(block)
-            choices.pack(fill="x")
-            for column, (label, preset) in enumerate(presets):
-                choices.columnconfigure(column, weight=1)
-                ttk.Button(choices, text=label, command=lambda k=key, v=preset: self.vars[k].set(v)).grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0))
-
-        advanced.columnconfigure(1, weight=1)
-        for row, (key, label, unit, step) in enumerate([
-            ("x", "左右位置", "米", 0.02), ("y", "上下位置", "米", 0.02),
-            ("pitch", "字幕倾斜", "°", 1), ("opacity", "不透明度", "%", 0.05),
-            ("crop_top", "顶部裁剪", "像素", 1),
-        ]):
-            ttk.Label(advanced, text=label, width=9).grid(row=row, column=0, sticky="w", pady=3)
-            ValueSlider(advanced, self.vars[key], *LIMITS[key], step=step).grid(row=row, column=1, sticky="ew", padx=8)
-            value = tk.StringVar()
-            self.value_labels[key] = (value, unit)
-            ttk.Label(advanced, textvariable=value, width=9, anchor="e").grid(row=row, column=2, sticky="e")
-        source_row = ttk.Frame(advanced)
-        source_row.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 4))
-        self.source_box = ttk.Combobox(source_row, state="readonly")
-        self.source_box.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.source_box.bind("<<ComboboxSelected>>", self.select_source)
-        ttk.Button(source_row, text="刷新", command=self.discover).pack(side="right")
-        ttk.Button(advanced, text="显示完整字幕条", command=lambda: self.vars["crop_top"].set(0)).grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
-        self.update_labels()
-        footer = ttk.Frame(outer)
-        footer.pack(fill="x", pady=(8, 0))
-        ttk.Button(footer, text="恢复默认", command=self.reset_settings).pack(side="left")
-        ttk.Button(footer, text="最小化", command=self.root.iconify).pack(side="left", padx=8)
-        ttk.Button(footer, text="退出并关闭 VR 字幕", style="Exit.TButton", command=self.close).pack(side="right")
-        ttk.Label(outer, text="最小化可继续显示；关闭窗口会退出 VR 字幕。", style="Muted.TLabel").pack(anchor="w", pady=(7, 0))
+    def refresh_appearance(self):
+        if self.closing:
+            return
+        if self.appearance.preference == "system":
+            previous = self.appearance.mode
+            self.appearance.apply("system")
+            if previous != self.appearance.mode:
+                self.show_page(self.current_page)
+        self.root.after(2000, self.refresh_appearance)
 
     def adjust(self, key, step):
         low, high = LIMITS[key]
         self.vars[key].set(round(min(high, max(low, self.vars[key].get() + step)), 3))
+
+    def behavior_changed(self):
+        self.exit_button.configure(text='退出并关闭豆包' if self.exit_close_doubao.get() else '退出并关闭 VR 字幕')
+        self.save_settings()
+
+    def capture_border_changed(self):
+        self.save_settings()
+        self.reconfigure_capture_border()
+
+    def reconfigure_capture_border(self):
+        if self.closing or not self.capture or not self.source:
+            return
+        desired = self.show_capture_border.get()
+        if self.capture.draw_border == desired:
+            return
+        if self.closer:
+            # The close-button matcher must finish using its current capture.
+            self.root.after(100, self.reconfigure_capture_border)
+            return
+        old_capture = self.capture
+        try:
+            replacement = WindowCapture(self.source, draw_border=desired).start()
+        except Exception:
+            logging.exception('Cannot change capture border')
+            self.show_capture_border.set(old_capture.draw_border)
+            self.save_settings()
+            self.status.set('无法切换捕获黄框，已保留原有捕获设置。')
+            return
+        self.capture = replacement
+        self.last_seq = -1
+        self.capture_started = time.monotonic()
+        self.no_frame_warned = False
+        self.dirty = True
+        # Keep the preview and VR texture while the new session receives a frame.
+        # Retiring the old native session must not block the Tk event loop.
+        def retire():
+            try:
+                old_capture.stop()
+            except Exception:
+                logging.exception('Previous capture cleanup failed')
+        stopper = threading.Thread(target=retire, name='CaptureBorderCleanup', daemon=True)
+        self.capture_stoppers.append(stopper)
+        stopper.start()
+        logging.info('Capture border requested: %s', desired)
+
+    def minimize(self):
+        if self.closing:
+            return
+        if not self.minimize_to_tray.get():
+            self.root.iconify()
+            return
+        try:
+            if self.tray is None or self.tray.error or self.tray.stopped:
+                if self.tray:
+                    self.tray.stop()
+                asset_root = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+                self.tray = TrayController(asset_root / 'assets' / 'bridge.png')
+            else:
+                self.tray.show()
+            self.tray_pending = True
+            self.tray_deadline = time.monotonic() + 5
+        except Exception:
+            logging.exception('Cannot minimize to tray')
+            self.tray_pending = False
+            self.root.deiconify()
+            self.status.set('托盘图标无法创建，控制窗口已保留。')
+
+    def on_unmap(self, event):
+        if event.widget is self.root and not self.closing and self.root.state() == 'iconic' and self.minimize_to_tray.get():
+            self.minimize()
+
+    def poll_tray(self):
+        if self.closing:
+            return
+        if self.tray:
+            while True:
+                try:
+                    action = self.tray.actions.get_nowait()
+                except queue.Empty:
+                    break
+                if action == 'restore':
+                    self.restore_window()
+                elif action == 'exit':
+                    self.exit_app()
+                    return
+            if self.tray_pending:
+                if self.tray.error or time.monotonic() >= self.tray_deadline:
+                    self.tray_pending = False
+                    self.root.deiconify()
+                    self.status.set('托盘图标未就绪，控制窗口已保留。')
+                elif self.tray.ready.is_set() and self.tray.icon.visible:
+                    self.tray_pending = False
+                    self.root.withdraw()
+                    logging.info('Controller minimized to system tray')
+        self.root.after(150, self.poll_tray)
 
     def refresh_caption_switch(self):
         if self.closing:
             return
         try:
             if not self.launcher and not self.closer:
-                self.update_caption_button(caption_candidate(doubao_windows()))
+                # A healthy caption connection is already authoritative; avoid
+                # scanning every Windows process twice a second while connected.
+                if (self.source and self.source.score >= 150 and self.capture
+                        and not self.capture.closed and still_same_window(self.source)
+                        and user32.IsWindowVisible(self.source.hwnd)
+                        and not user32.IsIconic(self.source.hwnd)):
+                    self.update_caption_button(self.source)
+                else:
+                    self.update_caption_button(caption_candidate(doubao_windows()))
         except Exception:
             logging.exception("Caption switch refresh failed")
         finally:
             if not self.closing:
-                self.root.after(500, self.refresh_caption_switch)
+                self.root.after(1000, self.refresh_caption_switch)
 
     def update_caption_button(self, caption):
-        self.launch_button.configure(state="normal", text="一键关闭字幕" if caption else "一键开启字幕")
+        text = "一键关闭字幕" if caption else "一键开启字幕"
+        if self.launch_button.cget('text') != text or self.launch_button.instate(['disabled']):
+            self.launch_button.configure(state="normal", text=text)
 
     def toggle_subtitles(self):
         if self.launcher or self.closer:
@@ -285,8 +362,27 @@ class BridgeApp:
         self.discover()
         self.status.set("豆包实时字幕已开启并连接。")
 
+    def request_preview(self):
+        self.preview_pending = True
+
+    def refresh_preview(self):
+        if self.closing:
+            return
+        if self.preview_pending and self.preview.winfo_ismapped():
+            self.draw_preview()
+        self.root.after(100, self.refresh_preview)
+
     def draw_preview(self):
+        self.preview_pending = True
+        if not self.preview.winfo_ismapped():
+            return
         width, height = self.preview.winfo_width(), self.preview.winfo_height()
+        signature = (self.converted_token, self.last_rgba is None, width, height)
+        if self.preview_signature == signature:
+            self.preview_pending = False
+            return
+        self.preview_signature = signature
+        self.preview_pending = False
         self.preview.coords(self.preview_image, width // 2, height // 2)
         self.preview.coords(self.preview_placeholder, width // 2, height // 2)
         if self.last_rgba is None:
@@ -318,6 +414,8 @@ class BridgeApp:
                 var.set(f"{value * 100:.0f}%")
             else:
                 var.set(f"{value:.0f} {unit}" if key in ("crop_top", "pitch") else f"{value:.2f} {unit}")
+        for key, preset, button in self.preset_buttons:
+            button.state(['selected' if abs(self.vars[key].get() - preset) < .001 else '!selected'])
 
     def values(self):
         return {k: v.get() for k, v in self.vars.items()}
@@ -327,7 +425,12 @@ class BridgeApp:
         try:
             target = BASE / "settings.json"
             temporary = target.with_suffix(".json.tmp")
-            temporary.write_text(json.dumps(self.values(), indent=2), encoding="utf-8")
+            saved = self.values()
+            saved['appearance'] = self.appearance.preference
+            saved['minimize_to_tray'] = self.minimize_to_tray.get()
+            saved['exit_close_doubao'] = self.exit_close_doubao.get()
+            saved['show_capture_border'] = self.show_capture_border.get()
+            temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
             temporary.replace(target)
         except OSError:
             logging.exception("Could not save settings")
@@ -377,13 +480,15 @@ class BridgeApp:
         self.capture = None
         self.source = None
         self.last_rgba = None
+        self.converted_token = None
+        self.overlay_token = None
         self.last_seq = -1
         self.draw_preview()
 
     def connect(self, window):
         self.disconnect()
         try:
-            self.capture = WindowCapture(window).start()
+            self.capture = WindowCapture(window, draw_border=self.show_capture_border.get()).start()
             self.source = window
             self.capture_started = time.monotonic()
             self.no_frame_warned = False
@@ -403,6 +508,7 @@ class BridgeApp:
             return
         try:
             self.overlay = SubtitleOverlay()
+            self.overlay_token = None
             self.dirty = True
             self.start_button.configure(text="关闭 VR 悬浮")
             self.vr_status.set("已开启 · 跟随头显视线")
@@ -419,6 +525,7 @@ class BridgeApp:
             except Exception:
                 logging.exception("Overlay cleanup failed")
         self.overlay = None
+        self.overlay_token = None
         try:
             self.start_button.configure(text="开启 VR 悬浮")
             self.vr_status.set(message)
@@ -436,7 +543,9 @@ class BridgeApp:
             self.disconnect()
         finally:
             if not self.closing:
-                self.root.after(50, self.tick)
+                # There is no VR latency to serve when both displays are idle.
+                delay = 50 if self.overlay or self.preview.winfo_ismapped() else 200
+                self.root.after(delay, self.tick)
 
     def update_frame(self):
         if self.overlay:
@@ -470,35 +579,49 @@ class BridgeApp:
         if self.overlay_hidden:
             self.overlay_hidden = False
             self.dirty = True
+            self.overlay_token = None
         seq, frame = self.capture.read()
         if frame is None:
             if time.monotonic() - self.capture_started > 8 and not self.no_frame_warned:
                 self.no_frame_warned = True
                 self.status.set("已连接但尚未收到画面。请展开字幕条，或刷新窗口后重试。")
             return
+        if not self.overlay and not self.preview.winfo_ismapped():
+            return  # Keep native latest-frame capture; process it on restore.
         if seq == self.last_seq and not self.dirty:
             return
-        self.last_rgba = to_rgba(frame, crop_top=self.vars["crop_top"].get())
-        self.draw_preview()
-        self.detail.set("字幕正在同步")
-        self.status.set("豆包实时字幕已连接")
+        token = (id(self.capture), seq, self.vars['crop_top'].get())
+        if token != self.converted_token:
+            self.last_rgba = to_rgba(frame, crop_top=token[2])
+            self.converted_token = token
+            self.request_preview()
+        if self.detail.get() != "字幕正在同步":
+            self.detail.set("字幕正在同步")
+        if self.status.get() != "豆包实时字幕已连接":
+            self.status.set("豆包实时字幕已连接")
         if self.overlay:
             try:
                 values = self.values()
                 values.pop("crop_top")
                 if self.dirty:
                     self.overlay.configure(**values)
-                if not self.overlay.submit(self.last_rgba):
-                    self.dirty = True
-                    return
-                self.vr_status.set("已开启 · 跟随头显视线")
+                if self.overlay_token != token:
+                    if not self.overlay.submit(self.last_rgba):
+                        self.dirty = True
+                        return
+                    self.overlay_token = token
+                if self.vr_status.get() != "已开启 · 跟随头显视线":
+                    self.vr_status.set("已开启 · 跟随头显视线")
             except Exception as exc:
                 logging.exception("Overlay submit failed")
                 self.stop_vr(f"VR 悬浮已断开：{exc}")
         self.last_seq = seq
         self.dirty = False
 
-    def close(self):
+    def exit_app(self):
+        self.close(close_doubao=self.exit_close_doubao.get())
+
+    def close(self, close_doubao=False):
         if self.closing:
             return
         self.closing = True
@@ -509,7 +632,25 @@ class BridgeApp:
             logging.exception("Settings save failed during exit")
         finally:
             self.cleanup()
-            self.root.destroy()
+            if close_doubao:
+                self.root.deiconify()
+                self.status.set('正在关闭豆包及其后台进程…')
+                self.launch_button.configure(state='disabled')
+                self.start_button.configure(state='disabled')
+                self.exit_button.configure(state='disabled', text='正在退出…')
+                self.exit_task = DoubaoExitTask()
+                self.root.after(80, self.poll_exit)
+            else:
+                self.root.destroy()
+
+    def poll_exit(self):
+        if not self.exit_task.done.is_set():
+            self.root.after(80, self.poll_exit)
+            return
+        if self.exit_task.error or self.exit_task.failed:
+            from tkinter import messagebox
+            messagebox.showwarning('豆包未完全退出', '部分豆包进程未能关闭，请从豆包托盘手动退出；字幕桥将退出。', parent=self.root)
+        self.root.destroy()
 
     def cleanup(self):
         # Remove VR output before waiting for a capture thread. A native WGC stop
@@ -530,6 +671,13 @@ class BridgeApp:
             stopper = threading.Thread(target=stop_capture, name="CaptureCleanup", daemon=True)
             stopper.start()
             self.capture_stoppers.append(stopper)
+        tray = getattr(self, 'tray', None)
+        if tray:
+            self.tray = None
+            try:
+                tray.stop()
+            except Exception:
+                logging.exception('Tray cleanup failed')
 
     def on_root_destroy(self, event):
         if event.widget is self.root:
@@ -537,6 +685,12 @@ class BridgeApp:
             self.cleanup()
 
     def restore_window(self):
+        self.tray_pending = False
+        if self.tray:
+            try:
+                self.tray.hide()
+            except Exception:
+                logging.exception('Cannot hide tray icon during restore')
         self.root.deiconify()
         width, height = self.root.winfo_width(), self.root.winfo_height()
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -549,6 +703,10 @@ class BridgeApp:
 
 def main():
     import ctypes
+    import cv2
+    # Caption-sized images do not benefit from a persistent 16-worker pool.
+    # Set this before the first native conversion/template match creates it.
+    cv2.setNumThreads(1)
     ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID("DoubaoVR.SubtitleBridge")
     from single_instance import SingleInstance
     instance = SingleInstance()
