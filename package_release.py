@@ -51,6 +51,7 @@ def main():
     python_root = Path(sys.base_prefix)
     entries['DoubaoVR/licenses/Python-LICENSE.txt'] = python_root / 'LICENSE.txt'
     entries['DoubaoVR/licenses/OpenVR-LICENSE.txt'] = ROOT / 'licenses' / 'OpenVR-LICENSE.txt'
+    entries['DoubaoVR/licenses/InnoSetup-LICENSE.txt'] = ROOT / 'licenses' / 'InnoSetup-LICENSE.txt'
     for component in ('tcl8.6', 'tk8.6'):
         terms = python_root / 'tcl' / component / 'license.terms'
         if not terms.is_file():

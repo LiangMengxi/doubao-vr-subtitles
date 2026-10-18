@@ -4,11 +4,11 @@
 
 将豆包桌面版的实时字幕窗口直接捕获到 SteamVR 悬浮层中。豆包负责原有的识别与翻译，本程序只转发画面。无需修改豆包或 VRChat。
 
-独立的非官方项目。当前版本 **v0.2.0**，适用于 Windows x64 / SteamVR，主要用于 VRChat 等 VR 场景中的多语种交流。
+独立的非官方项目。当前版本 **v0.2.1**，适用于 Windows x64 / SteamVR，主要用于 VRChat 等 VR 场景中的多语种交流。
 
 ## 下载版快速开始
 
-从仓库的 **Releases** 下载 `DoubaoVR-v0.2.0-windows-x64.zip`，完整解压后双击 `DoubaoVR.exe`，无需安装 Python。保留同目录的 `_internal` 文件夹。首次运行步骤见 [版本说明](RELEASE_NOTES.md)。
+从仓库的 **Releases** 下载 `DoubaoVR-v0.2.1-Setup-x64.exe` 并运行，安装后从桌面或开始菜单打开，无需安装 Python。后续安装包会自动选用上次的安装路径，覆盖更新程序并保留设置。也提供 ZIP 免安装版。
 
 额外的识别和翻译软件只需安装并登录**豆包桌面版**；VR 显示使用已有的 **SteamVR 与头显**。无需其他语音识别或翻译工具，VRChat 也不是必需依赖。
 
@@ -17,7 +17,7 @@
 ## 使用
 
 1. 启动 SteamVR，并连接头显；通过 SteamVR 运行 VRChat。
-2. 双击 `start.cmd`，或打开 `dist/DoubaoVR/DoubaoVR.exe`。
+2. 打开桌面或开始菜单中的“豆包 VR 字幕桥”。源码目录也可双击 `start.cmd`。
 3. 点击左上角“一键开启字幕”。程序会在后台启动本机豆包（如尚未运行），使用豆包已配置的实时字幕快捷键，并自动连接字幕窗口。豆包已在后台运行时不会另行启动或激活主界面。
 4. 确认桌面预览显示目标字幕，点击“开启 VR 悬浮”。
 5. 在“大小与距离”选择小/标准/大字幕、近/适中/远距离，或使用“＋／−”微调。每次调整大小 5%、距离 0.1 米；也支持拖动滑块。
@@ -81,15 +81,18 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --windowed --onedir --name DoubaoVR --icon assets/bridge.ico --collect-all openvr --collect-all windows_capture --collect-all sv_ttk --add-data "assets/bridge.png;assets" --add-data "assets/bridge.ico;assets" --add-data "assets/caption-close.png;assets" app.py
 ```
 
-分发时需保留整个 `dist/DoubaoVR` 文件夹，不能只拷贝 EXE。日志和设置保存在可执行文件旁，程序应放在有写入权限的文件夹。
+设置和日志保存在 `%LOCALAPPDATA%\DoubaoVR`，独立于安装目录，更新或移动程序不会清空。首次运行会从程序旁的旧版 `settings.json` 导入配置，已有用户配置始终优先保留。
 
 生成用于 Releases 的 ZIP 和 SHA256 文件：
 
 ```powershell
 .\.venv\Scripts\python.exe package_release.py
+.\.venv\Scripts\python.exe build_installer.py --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 ```
 
-输出在 `releases/`，包含运行程序、说明和第三方许可。打包脚本仅选择运行所需文件，不包含本机设置、日志、测试截图或录音。第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+需要 Inno Setup 6.7 或更新版本，`--iscc` 指向其实际编译器路径。输出在 `releases/`，包含安装 EXE、可选免安装 ZIP 和各自 SHA256。安装器使用固定 AppId 和每用户安装方式，记忆原路径；只替换程序文件，不包含或删除用户配置。卸载后配置也会保留。
+
+发布包包含运行程序、说明和第三方许可，不包含本机设置、日志、测试截图或录音。第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 排错
 

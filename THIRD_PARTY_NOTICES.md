@@ -18,5 +18,6 @@ Windows 发布包使用以下第三方组件；相应许可文本随压缩包中
 | Sun Valley ttk theme | https://github.com/rdbende/Sun-Valley-ttk-theme | MIT |
 | pystray | https://github.com/moses-palmer/pystray | LGPLv3 |
 | six | https://github.com/benjaminp/six | MIT |
+| Inno Setup 安装引导程序及中文翻译 | https://jrsoftware.org/ / https://github.com/jrsoftware/issrc | Inno Setup 随附许可；翻译保留原作者信息 |
 
 `assets/caption-close.png` 是用于识别本机豆包字幕关闭按钮的最小模板图；豆包及其界面相关权利属于相应权利人。应用图标为本项目生成。

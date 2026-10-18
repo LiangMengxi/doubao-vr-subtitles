@@ -4,7 +4,6 @@ import os
 # process-local limit before NumPy loads, preserving any explicit user setting.
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
-import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -21,11 +20,11 @@ from capture_source import WindowCapture, to_rgba
 from window_source import doubao_windows, still_same_window, user32
 from vr_overlay import SubtitleOverlay
 from subtitle_launcher import SubtitleLauncher, SubtitleCloser, caption_candidate
-from fluent_ui import build_ui as build_fluent_ui, APPEARANCES, set_page_focus
+from fluent_ui import build_ui as build_fluent_ui, APPEARANCES
 from tray_controller import TrayController
 from doubao_exit import DoubaoExitTask
+from app_paths import DATA_DIR, load_config, save_config, migrate_legacy_settings
 
-BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 DEFAULTS = {"width": 1.0, "distance": 1.2, "x": 0.0, "y": -0.32, "opacity": 1.0, "pitch": 0.0, "crop_top": 0}
 LIMITS = {"width": (0.25, 2.5), "distance": (0.4, 3.0), "x": (-1.2, 1.2), "y": (-1.2, 0.8), "opacity": (0.1, 1.0), "pitch": (-45, 45), "crop_top": (0, 120)}
 
@@ -33,7 +32,7 @@ LIMITS = {"width": (0.25, 2.5), "distance": (0.4, 3.0), "x": (-1.2, 1.2), "y": (
 def load_settings():
     values = dict(DEFAULTS)
     try:
-        saved = json.loads((BASE / "settings.json").read_text(encoding="utf-8"))
+        saved = load_config()
         for key, default in DEFAULTS.items():
             value = float(saved.get(key, default))
             low, high = LIMITS[key]
@@ -46,7 +45,7 @@ def load_settings():
 
 def load_appearance():
     try:
-        choice = json.loads((BASE / 'settings.json').read_text(encoding='utf-8')).get('appearance', 'system')
+        choice = load_config().get('appearance', 'system')
         return choice if choice in APPEARANCES.values() else 'system'
     except (OSError, ValueError, TypeError, AttributeError):
         return 'system'
@@ -55,7 +54,7 @@ def load_appearance():
 def load_behavior():
     defaults = {'minimize_to_tray': False, 'exit_close_doubao': True, 'show_capture_border': False}
     try:
-        saved = json.loads((BASE / 'settings.json').read_text(encoding='utf-8'))
+        saved = load_config()
         for key in defaults:
             if type(saved.get(key)) is bool:
                 defaults[key] = saved[key]
@@ -128,10 +127,9 @@ class BridgeApp:
         self.root.after(2000, self.refresh_appearance)
 
     def show_page(self, key):
-        set_page_focus(self, key)
         self.current_page = key
         p = self.appearance.palette
-        self.pages[key].tkraise()
+        self.page_area.show(key)
         for name, page in self.pages.items():
             self.page_buttons[name].state(["selected" if name == key else "!selected"])
             self.page_markers[name].configure(bg=p["accent"] if name == key else p["background"])
@@ -408,6 +406,7 @@ class BridgeApp:
         self.save_after = self.root.after(500, self.save_settings)
 
     def update_labels(self):
+        self.page_area.request_draw()
         for key, (var, unit) in self.value_labels.items():
             value = self.vars[key].get()
             if key in ("width", "opacity"):
@@ -423,15 +422,12 @@ class BridgeApp:
     def save_settings(self):
         self.save_after = None
         try:
-            target = BASE / "settings.json"
-            temporary = target.with_suffix(".json.tmp")
             saved = self.values()
             saved['appearance'] = self.appearance.preference
             saved['minimize_to_tray'] = self.minimize_to_tray.get()
             saved['exit_close_doubao'] = self.exit_close_doubao.get()
             saved['show_capture_border'] = self.show_capture_border.get()
-            temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
-            temporary.replace(target)
+            save_config(saved)
         except OSError:
             logging.exception("Could not save settings")
 
@@ -716,9 +712,10 @@ def main():
         return
     app = None
     try:
-        (BASE / "logs").mkdir(exist_ok=True)
-        handler = RotatingFileHandler(BASE / "logs" / "bridge.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+        (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(DATA_DIR / "logs" / "bridge.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
         logging.basicConfig(level=logging.INFO, handlers=[handler], format="%(asctime)s %(levelname)s %(message)s")
+        migrate_legacy_settings()
         root = tk.Tk()
         app = BridgeApp(root)
         atexit.register(app.cleanup)

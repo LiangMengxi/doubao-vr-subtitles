@@ -6,6 +6,7 @@ from tkinter import ttk
 import winreg
 import sv_ttk
 from ui_controls import ValueSlider
+from settings_view import SettingsView
 
 PALETTES = {
     'light': dict(background='#f3f3f3', card='#ffffff', border='#e5e5e5',
@@ -235,10 +236,8 @@ def build_ui(app, limits, preference):
     app.pages = {}
     app.page_buttons = {}
     app.page_markers = {}
-    app.page_area = ttk.Frame(outer)
+    app.page_area = SettingsView(outer, app, app.appearance)
     app.page_area.pack(fill='both', expand=True)
-    app.page_area.columnconfigure(0, weight=1)
-    app.page_area.rowconfigure(0, weight=1)
     for key, label in [('quick', '大小与距离'), ('advanced', '位置与更多设置'), ('program', '程序设置')]:
         group = ttk.Frame(pivot)
         group.pack(side='left', padx=(0, 16))
@@ -247,82 +246,7 @@ def build_ui(app, limits, preference):
         marker = tk.Frame(group, height=3)
         marker.pack(fill='x', padx=8)
         app.page_buttons[key], app.page_markers[key] = button, marker
-        app.pages[key] = ttk.Frame(app.page_area)
-        # Keep page geometry stable. Raising an opaque, full-size page avoids
-        # removing/repacking the previous page and exposing its old pixels.
-        app.pages[key].grid(row=0, column=0, sticky='nsew')
-
-    quick = app.pages['quick']
-    for key, title, unit, step, presets in [
-        ('width', '字幕大小', '%', .05, [('小字幕', .7), ('标准', 1.0), ('大字幕', 1.4)]),
-        ('distance', '前方距离', '米', .1, [('近 · 0.8 米', .8), ('适中 · 1.2 米', 1.2), ('远 · 1.8 米', 1.8)]),
-    ]:
-        card = Card(quick, app.appearance)
-        card.pack(fill='x', pady=(0, 8))
-        block = card.content
-        heading = ttk.Frame(block, style='Surface.TFrame')
-        heading.pack(fill='x')
-        ttk.Label(heading, text=title, style='CardHeading.TLabel').pack(side='left')
-        value = tk.StringVar()
-        app.value_labels[key] = value, unit
-        ttk.Label(heading, textvariable=value, style='CardValue.TLabel').pack(side='right')
-        row = ttk.Frame(block, style='Surface.TFrame')
-        row.pack(fill='x', pady=(1, 4))
-        ttk.Button(row, text='−', width=2, style='Step.TButton', command=lambda k=key, s=step: app.adjust(k, -s)).pack(side='left')
-        slider = ValueSlider(row, app.vars[key], *limits[key], step=step)
-        slider.pack(side='left', fill='x', expand=True, padx=8)
-        app.appearance.register(slider)
-        ttk.Button(row, text='+', width=2, style='Step.TButton', command=lambda k=key, s=step: app.adjust(k, s)).pack(side='right')
-        choices = ttk.Frame(block, style='Surface.TFrame')
-        choices.pack(fill='x')
-        for column, (label, preset) in enumerate(presets):
-            choices.columnconfigure(column, weight=1)
-            button = ttk.Button(choices, text=label, style='Preset.Toggle.TButton', command=lambda k=key, v=preset: app.vars[k].set(v))
-            button.grid(row=0, column=column, sticky='ew', padx=(0 if column == 0 else 6, 0))
-            app.preset_buttons.append((key, preset, button))
-
-    advanced = app.pages['advanced']
-    settings = Card(advanced, app.appearance, padding=(12, 8))
-    settings.pack(fill='x', pady=(0, 8))
-    panel = settings.content
-    panel.columnconfigure(1, weight=1)
-    for row, (key, label, unit, step) in enumerate([
-        ('x', '左右位置', '米', .02), ('y', '上下位置', '米', .02),
-        ('pitch', '字幕倾斜', '°', 1), ('opacity', '不透明度', '%', .05),
-        ('crop_top', '顶部裁剪', '像素', 1),
-    ]):
-        ttk.Label(panel, text=label, style='Card.TLabel').grid(row=row, column=0, sticky='w', pady=2)
-        slider = ValueSlider(panel, app.vars[key], *limits[key], step=step)
-        slider.grid(row=row, column=1, sticky='ew', padx=12)
-        app.appearance.register(slider)
-        value = tk.StringVar()
-        app.value_labels[key] = value, unit
-        ttk.Label(panel, textvariable=value, width=8, anchor='e', style='Card.TLabel').grid(row=row, column=2, sticky='e')
-    source = ttk.Frame(advanced)
-    source.pack(fill='x', pady=(0, 6))
-    app.source_box = ttk.Combobox(source, state='readonly')
-    app.source_box.pack(side='left', fill='x', expand=True, padx=(0, 8))
-    app.source_box.bind('<<ComboboxSelected>>', app.select_source)
-    ttk.Button(source, text='刷新', command=app.discover).pack(side='right')
-    ttk.Button(advanced, text='显示完整字幕条', command=lambda: app.vars['crop_top'].set(0)).pack(anchor='w')
-    program = app.pages['program']
-    for title, description, variable, command in [
-        ('最小化到系统托盘', '最小化后收入右下角托盘，点击图标或再次运行软件可恢复。', app.minimize_to_tray, app.behavior_changed),
-        ('退出按钮同时关闭豆包', '底部和托盘的“退出”会结束豆包后台进程；上方开关独立。', app.exit_close_doubao, app.behavior_changed),
-        ('显示捕获黄框', '关闭后隐藏字幕窗口的捕获黄框，切换立即生效。', app.show_capture_border, app.capture_border_changed),
-    ]:
-        card = Card(program, app.appearance, padding=(12, 6))
-        card.pack(fill='x', pady=(0, 8))
-        row = ttk.Frame(card.content, style='Surface.TFrame')
-        row.pack(fill='x')
-        ttk.Label(row, text=title, style='CardHeading.TLabel').pack(side='left')
-        ttk.Checkbutton(row, variable=variable, style='Switch.TCheckbutton', command=command).pack(side='right')
-        description_label = ttk.Label(card.content, text=description, style='CardMuted.TLabel', wraplength=445)
-        description_label.pack(anchor='w', pady=(3, 0))
-        card.content.bind('<Configure>', lambda event, label=description_label: label.configure(wraplength=max(200, event.width)))
-    ttk.Label(program, text='右上角 × 仍只退出字幕桥，并关闭 VR 悬浮。', style='Muted.TLabel').pack(anchor='w', pady=2)
-    cache_page_focus(app)
-    set_page_focus(app, 'quick')
+        app.pages[key] = app.page_area
     app.show_page('quick')
     app.appearance.on_changed = lambda: app.show_page(app.current_page)
     app.update_labels()
