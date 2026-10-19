@@ -1,8 +1,10 @@
 # 发布约定
 
+v0.2.5 起使用 `native-rewrite/package-release.ps1 -Iscc <ISCC.exe>` 构建发行包；`tools/` 中的 Python 打包脚本仅保留给旧版使用。主程序保持名为 `DoubaoVR.exe`，原安装器 AppId 不变。版本源为根目录和重构目录的 `VERSION`，发布脚本要求二者一致，并核对 EXE、核心 DLL、安装器与包内文档版本。
+
 - 每次发布提供 Windows 安装 EXE 与 SHA256；ZIP 仅作为可选免安装版。
 - 安装器 AppId 必须保持不变，保留 `UsePreviousAppDir=yes`，让后续安装默认沿用原路径。
-- 用户配置存放在 `%LOCALAPPDATA%\DoubaoVR`，不得随安装、升级或卸载清空。旧版配置只在没有现有配置时导入。
+- 旧版用户配置存放在 `%LOCALAPPDATA%\DoubaoVR`，v0.2.5 使用 `%LOCALAPPDATA%\DoubaoVR.Native`，两处均不得随安装、升级或卸载清空。旧版配置只在没有现有配置时导入。
 - 安装文件从发布白名单构建，不收集运行目录中的个人设置、日志、测试脚本、截图、原稿或开发工具。
 - 更新日志只列用户可见的新增功能、行为变化和修复的问题，不记录开发对话、内部方案编号或测试过程。
 - 修复页面切换问题时检查连续画面，并确认页面内容完整；不能仅凭切换结束后的截图判断。

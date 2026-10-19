@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="EnforceRepositoryPolicy" BeforeTargets="BeforeBuild">
+    <Exec Command="pwsh.exe -NoProfile -File &quot;$(MSBuildThisFileDirectory)scripts\check-policy.ps1&quot;" />
+  </Target>
+</Project>

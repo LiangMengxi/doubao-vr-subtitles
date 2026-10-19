@@ -1,0 +1,7 @@
+out/
+.vs/
+**/bin/
+**/obj/
+dependencies/
+backups/
+*.user

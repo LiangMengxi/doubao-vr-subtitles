@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>DoubaoVR</AssemblyName>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <SelfContained>true</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\assets\bridge.ico</ApplicationIcon>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="[1.7.250606001]" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.7705]" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="[1.7.251221100]" />
+    <Content Include="..\assets\bridge.ico" Link="bridge.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\out\core\Release\DoubaoVR.Core.dll" Link="DoubaoVR.Core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\DoubaoVR.Core.dll')" />
+    <Content Include="..\out\core\Release\openvr_api.dll" Link="openvr_api.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\openvr_api.dll')" />
+    <Content Include="..\out\core\Release\OpenVR-LICENSE.txt" Link="OpenVR-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\OpenVR-LICENSE.txt')" />
+  </ItemGroup>
+  <Target Name="IncludeCompiledXamlInPublish" AfterTargets="ComputeFilesToPublish">
+    <Error Condition="!Exists('$(TargetDir)App.xbf') Or !Exists('$(TargetDir)$(AssemblyName).pri')" Text="Compiled WinUI resources are missing." />
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(TargetDir)App.xbf">
+        <RelativePath>App.xbf</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="$(TargetDir)$(AssemblyName).pri">
+        <RelativePath>$(AssemblyName).pri</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>
