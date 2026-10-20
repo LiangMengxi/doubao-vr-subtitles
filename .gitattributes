@@ -1,6 +1,8 @@
 * text=auto
-*.ps1 text eol=lf
+*.ps1 text eol=lf -linguist-detectable
 *.md text eol=lf
-*.cmd text eol=crlf
+*.cmd text eol=crlf -linguist-detectable
 *.png binary
 *.ico binary
+native-rewrite/CMakeLists.txt -linguist-detectable
+native-rewrite/installer/* -linguist-detectable
