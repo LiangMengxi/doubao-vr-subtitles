@@ -44,6 +44,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'GPU tests failed.' }
         dotnet run --project tests/ManagedChecks.csproj -c Release -- out/core/Release/DoubaoVR.Core.dll
         if ($LASTEXITCODE -ne 0) { throw 'Managed ABI and lifecycle tests failed.' }
+        $motionCheck = Start-Process -FilePath (Join-Path $rewriteRoot 'ui\bin\Release\net8.0-windows10.0.19041.0\win-x64\DoubaoVR.exe') -ArgumentList '--settings-motion-test' -WindowStyle Hidden -PassThru
+        try {
+            if (-not $motionCheck.WaitForExit(30000)) { $motionCheck.Kill(); throw 'Settings motion checks timed out.' }
+            if ($motionCheck.ExitCode -ne 0) { throw 'Settings motion checks failed. See the application log for per-frame layout results.' }
+            Write-Host 'PASS: synchronized settings motion, interruption and resize checks.'
+        } finally { $motionCheck.Dispose() }
     }
     if ($Publish) {
         & (Join-Path $rewriteRoot 'scripts\backup-source.ps1')

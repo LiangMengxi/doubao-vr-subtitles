@@ -52,7 +52,26 @@ struct BridgeError {
     std::array<wchar_t, 2048> text{};
 };
 
+inline constexpr uint32_t bridge_audio_capacity = 128;
+struct BridgeAudioDevice {
+    std::array<wchar_t, 512> id{};
+    std::array<wchar_t, 256> name{};
+    uint32_t default_roles = 0;
+};
+struct BridgeAudioDevices {
+    uint32_t size = sizeof(BridgeAudioDevices);
+    uint32_t count = 0;
+    std::array<BridgeAudioDevice, bridge_audio_capacity> devices{};
+};
+struct BridgeAudioTarget {
+    uint32_t size = sizeof(BridgeAudioTarget);
+    std::array<wchar_t, 512> playback{};
+    std::array<wchar_t, 512> microphone{};
+};
+
 extern "C" {
+BRIDGE_API int32_t __cdecl bridge_audio_devices(uint32_t flow, BridgeAudioDevices& devices, BridgeError& error) noexcept;
+BRIDGE_API int32_t __cdecl bridge_audio_restore(const BridgeAudioTarget& target, BridgeError& error) noexcept;
 BRIDGE_API uint32_t __cdecl bridge_version() noexcept;
 BRIDGE_API BridgeId __cdecl bridge_create() noexcept;
 BRIDGE_API void __cdecl bridge_destroy(BridgeId bridge) noexcept;

@@ -22,6 +22,13 @@ internal sealed class Settings
     [JsonPropertyName("trim")] public bool Trim { get; set; } = true;
     [JsonPropertyName("exit_close_doubao")] public bool ExitCloseDoubao { get; set; }
     [JsonPropertyName("minimize_on_close")] public bool MinimizeOnClose { get; set; }
+    [JsonPropertyName("accent_color")] public string AccentColor { get; set; } = "";
+    [JsonPropertyName("background_image")] public string BackgroundImage { get; set; } = "";
+    [JsonPropertyName("background_opacity")] public float BackgroundOpacity { get; set; } = .3f;
+    [JsonPropertyName("audio_target_id")] public string AudioTargetId { get; set; } = "";
+    [JsonPropertyName("audio_target_name")] public string AudioTargetName { get; set; } = "";
+    [JsonPropertyName("microphone_target_id")] public string MicrophoneTargetId { get; set; } = "";
+    [JsonPropertyName("microphone_target_name")] public string MicrophoneTargetName { get; set; } = "";
 
     public static Settings Load()
     {
@@ -55,6 +62,13 @@ internal sealed class Settings
         Yaw = Limit(Yaw, -45, 45, 0);
         CropTop = Limit(CropTop, 0, 120, 0);
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
+        AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
+        if (!BackgroundFiles.IsOwnedName(BackgroundImage)) BackgroundImage = "";
+        BackgroundOpacity = Limit(BackgroundOpacity, 0, 1, .3f);
+        if (AudioTargetId is null || AudioTargetId.Length >= 512 || AudioTargetId.Contains('\0')) AudioTargetId = "";
+        if (AudioTargetName is null || AudioTargetName.Length > 255) AudioTargetName = "";
+        if (MicrophoneTargetId is null || MicrophoneTargetId.Length >= 512 || MicrophoneTargetId.Contains('\0')) MicrophoneTargetId = "";
+        if (MicrophoneTargetName is null || MicrophoneTargetName.Length > 255) MicrophoneTargetName = "";
     }
 
     private static float Limit(float value, float minimum, float maximum, float fallback) =>
@@ -68,6 +82,7 @@ internal sealed class Settings
         File.WriteAllText(temporary, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         if (File.Exists(FilePath)) File.Copy(FilePath, FilePath + ".bak", true);
         File.Move(temporary, FilePath, true);
+        BackgroundFiles.Cleanup(DataDirectory, BackgroundImage);
     }
 
     public BridgeOptions Options(bool vr, bool preview) => new()

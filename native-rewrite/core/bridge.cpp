@@ -411,7 +411,7 @@ Registry& registry() {
 }
 }
 
-uint32_t __cdecl bridge_version() noexcept { return 3; }
+uint32_t __cdecl bridge_version() noexcept { return 5; }
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }

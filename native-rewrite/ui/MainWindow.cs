@@ -13,7 +13,7 @@ using Windows.Graphics;
 
 namespace DoubaoVR.Desktop;
 
-internal sealed class MainWindow : Window
+internal sealed partial class MainWindow : Window
 {
     private readonly Settings settings = Settings.Load();
     private readonly SemaphoreSlim operations = new(1, 1);
@@ -52,8 +52,13 @@ internal sealed class MainWindow : Window
         var icon = Path.Combine(AppContext.BaseDirectory, "bridge.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         SystemBackdrop = new MicaBackdrop();
+        accent = new AccentTheme(root);
+        accent.Apply(settings.AccentColor);
+        background.ImageFailed += BackgroundFailed;
         Build();
-        Content = root;
+        surface.Children.Add(background);
+        surface.Children.Add(root);
+        Content = surface;
         root.ActualThemeChanged += (_, _) => NativeBridge.TitleBarTheme(WinRT.Interop.WindowNative.GetWindowHandle(this), root.ActualTheme == ElementTheme.Dark);
         ApplyTheme();
         AppWindow.Changed += (_, arguments) =>
@@ -77,13 +82,15 @@ internal sealed class MainWindow : Window
         timer.Start();
         try
         {
-            if (NativeBridge.Version() != 3) throw new InvalidOperationException("原生核心接口版本不匹配。");
+            if (NativeBridge.Version() != 5) throw new InvalidOperationException("原生核心接口版本不匹配。");
             bridge = new BridgeHandle();
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
         }
         catch (Exception exception) { Report(new InvalidOperationException("原生核心尚未就绪，请运行 build.ps1 完成构建。" + exception.Message)); }
         if (Settings.LoadWarning != null) status.Text = Settings.LoadWarning;
         RefreshSources();
+        ApplyBackground();
+        _ = RefreshAudioAsync();
     }
 
     private static TextBlock Heading(string text, double size = 18) => new() { Text = text, FontSize = size, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
@@ -169,7 +176,8 @@ internal sealed class MainWindow : Window
             if (changingSources || !running || shuttingDown) return;
             try { await StartAsync(vrEnabled); } catch (Exception exception) { Report(exception); }
         };
-        preferences.Children.Add(Card(sourceCard));
+        audioSection = SettingsSection("音频设备", AudioSettings());
+        preferences.Children.Add(audioSection);
         var behavior = Column();
         var minimizeOnClose = new ToggleSwitch { Header = "关闭时自动最小化", IsOn = settings.MinimizeOnClose };
         minimizeOnClose.Toggled += (_, _) => { settings.MinimizeOnClose = minimizeOnClose.IsOn; ApplyConfiguration(); };
@@ -177,18 +185,18 @@ internal sealed class MainWindow : Window
         var closeDoubao = new ToggleSwitch { Header = "退出时同时关闭豆包", IsOn = settings.ExitCloseDoubao };
         closeDoubao.Toggled += (_, _) => { settings.ExitCloseDoubao = closeDoubao.IsOn; ApplyConfiguration(); };
         behavior.Children.Add(closeDoubao);
-        preferences.Children.Add(Card(behavior));
         var imageSettings = Column();
         imageSettings.Children.Add(Slider("顶部裁剪", 0, 120, 1, settings.CropTop, value => settings.CropTop = (float)value, value => $"{value:F0} 像素",
             ("完整", 0), ("隐藏工具栏", 44)));
         var trim = new ToggleSwitch { Header = "裁去透明边缘", IsOn = settings.Trim };
         trim.Toggled += (_, _) => { settings.Trim = trim.IsOn; ApplyConfiguration(); };
         imageSettings.Children.Add(trim);
-        preferences.Children.Add(Card(imageSettings));
+        sourceCard.Children.Add(imageSettings);
         var appearance = Column();
         var theme = new ComboBox { Header = "主题", HorizontalAlignment = HorizontalAlignment.Stretch, ItemsSource = new[] { "跟随系统", "浅色", "深色" }, SelectedIndex = settings.Appearance == "light" ? 1 : settings.Appearance == "dark" ? 2 : 0 };
         theme.SelectionChanged += (_, _) => { settings.Appearance = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system"; ApplyTheme(); ApplyConfiguration(); };
         appearance.Children.Add(theme);
+        appearance.Children.Add(ColorSettings());
         var border = new ToggleSwitch { Header = "显示捕获黄框", IsOn = settings.Border };
         border.Toggled += async (_, _) =>
         {
@@ -196,13 +204,27 @@ internal sealed class MainWindow : Window
             try { settings.Save(); if (running) await StartAsync(vrEnabled); }
             catch (Exception exception) { Report(exception); }
         };
-        appearance.Children.Add(border);
-        preferences.Children.Add(Card(appearance));
+        sourceCard.Children.Add(border);
+        appearance.Children.Add(BackgroundSettings());
+        preferences.Children.Add(SettingsSection("主题与背景", appearance));
+        preferences.Children.Add(SettingsSection("字幕捕获", sourceCard));
+        preferences.Children.Add(SettingsSection("程序设置", behavior));
         var pageHost = new Grid();
         var navigation = EqualColumns(3);
         var pageButtons = new List<ToggleButton>();
         var pages = new List<ScrollViewer>();
         var entries = new[] { ("字幕", home), ("位置", advanced), ("设置", preferences) };
+        showPage = currentIndex =>
+        {
+            selectedPage = currentIndex;
+            for (int index = 0; index < pages.Count; index++)
+            {
+                pageButtons[index].IsChecked = index == currentIndex;
+                pages[index].Visibility = index == currentIndex ? Visibility.Visible : Visibility.Collapsed;
+            }
+            previewVisible = selectedPage == 0 && (AppWindow.Presenter is not OverlappedPresenter current || current.State != OverlappedPresenterState.Minimized);
+            ApplyConfiguration();
+        };
         for (int pageIndex = 0; pageIndex < entries.Length; pageIndex++)
         {
             int currentIndex = pageIndex;
@@ -212,25 +234,19 @@ internal sealed class MainWindow : Window
             pages.Add(page);
             AddCell(navigation, button, pageIndex);
             pageHost.Children.Add(page);
-            button.Click += (_, _) =>
-            {
-                selectedPage = currentIndex;
-                for (int index = 0; index < pages.Count; index++)
-                {
-                    pageButtons[index].IsChecked = index == currentIndex;
-                    pages[index].Visibility = index == currentIndex ? Visibility.Visible : Visibility.Collapsed;
-                }
-                previewVisible = selectedPage == 0 && (AppWindow.Presenter is not OverlappedPresenter current || current.State != OverlappedPresenterState.Minimized);
-                ApplyConfiguration();
-            };
+            button.Click += (_, _) => showPage(currentIndex);
         }
         root.Children.Add(navigation);
         Grid.SetRow(pageHost, 1);
         root.Children.Add(pageHost);
         var exit = new Button { Content = "退出", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
         exit.Click += (_, _) => RequestExit();
-        Grid.SetRow(exit, 2);
-        root.Children.Add(exit);
+        var footer = EqualColumns(2);
+        restoreAudio.Click += async (_, _) => await RestoreAudioAsync();
+        AddCell(footer, restoreAudio, 0);
+        AddCell(footer, exit, 1);
+        Grid.SetRow(footer, 2);
+        root.Children.Add(footer);
     }
 
     private static Grid EqualColumns(int count)
@@ -296,7 +312,11 @@ internal sealed class MainWindow : Window
         return panel;
     }
 
-    private void ApplyTheme() => root.RequestedTheme = settings.Appearance == "light" ? ElementTheme.Light : settings.Appearance == "dark" ? ElementTheme.Dark : ElementTheme.Default;
+    private void ApplyTheme()
+    {
+        var theme = settings.Appearance == "light" ? ElementTheme.Light : settings.Appearance == "dark" ? ElementTheme.Dark : ElementTheme.Default;
+        surface.RequestedTheme = root.RequestedTheme = theme;
+    }
     private void ApplyConfiguration() { if (!shuttingDown && saveTimer != null) { saveTimer.Stop(); saveTimer.Start(); } }
 
     private async Task ConfigureAsync()
@@ -429,6 +449,10 @@ internal sealed class MainWindow : Window
     {
         if (shuttingDown) return;
         shuttingDown = true;
+        activeDialog?.Hide();
+        accent.Dispose();
+        background.ImageFailed -= BackgroundFailed;
+        background.Source = null;
         Log.Write("Shutdown requested; releasing native core.");
         lifetime.Cancel();
         timer.Stop();

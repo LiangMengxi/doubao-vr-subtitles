@@ -3,8 +3,124 @@
 #include <cstring>
 #include <stdexcept>
 #include <openvr.h>
+#include "audio_restore.h"
+#include <mmdeviceapi.h>
+#include <propsys.h>
+
+namespace {
+struct __declspec(uuid("F8679F50-850A-41CF-9C72-430F290290C8")) AudioPolicy : IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR device, void** format) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR device, int format_type, void** format) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR device) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR device, void* endpoint, void* mix) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR device, int defaults, void* period, void* minimum) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR device, void* period) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR device, void* mode) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR device, void* mode) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR device, const PROPERTYKEY& key, PROPVARIANT* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR device, const PROPERTYKEY& key, PROPVARIANT* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR device, ERole role) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR device, int visible) = 0;
+};
+
+struct PropertyValue {
+    PROPVARIANT value{};
+    ~PropertyValue() { PropVariantClear(&value); }
+    PropertyValue() = default;
+    PropertyValue(const PropertyValue&) = delete;
+    PropertyValue& operator=(const PropertyValue&) = delete;
+    std::wstring text() const { return value.vt == VT_LPWSTR && value.pwszVal ? std::wstring(value.pwszVal) : std::wstring(); }
+};
+
+std::wstring audio_id(const winrt::com_ptr<IMMDevice>& device) {
+    PropertyValue identifier;
+    identifier.value.vt = VT_LPWSTR;
+    winrt::check_hresult(device->GetId(&identifier.value.pwszVal));
+    return identifier.text();
+}
+
+class AudioDefaults {
+public:
+    winrt::com_ptr<IMMDeviceEnumerator> enumerator = winrt::create_instance<IMMDeviceEnumerator>(__uuidof(MMDeviceEnumerator));
+    std::wstring current(uint32_t role) const {
+        winrt::com_ptr<IMMDevice> device;
+        winrt::check_hresult(enumerator->GetDefaultAudioEndpoint(role < 3 ? eRender : eCapture, static_cast<ERole>(role % 3), device.put()));
+        return audio_id(device);
+    }
+    void set(std::wstring_view device, uint32_t role) {
+        if (!policy) {
+            constexpr GUID policy_class{0x870af99c, 0x171d, 0x4f9e, {0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9}};
+            policy = winrt::create_instance<AudioPolicy>(policy_class);
+        }
+        const std::wstring identifier(device);
+        winrt::check_hresult(policy->SetDefaultEndpoint(identifier.c_str(), static_cast<ERole>(role % 3)));
+    }
+private:
+    winrt::com_ptr<AudioPolicy> policy;
+};
+
+std::wstring validated_audio_id(const AudioDefaults& defaults, std::wstring_view identifier, EDataFlow expected) {
+    if (identifier.empty()) return {};
+    winrt::com_ptr<IMMDevice> device;
+    const std::wstring target(identifier);
+    winrt::check_hresult(defaults.enumerator->GetDevice(target.c_str(), device.put()));
+    DWORD state = 0;
+    winrt::check_hresult(device->GetState(&state));
+    if (state != DEVICE_STATE_ACTIVE) throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_FOUND), L"目标音频设备未连接。");
+    auto endpoint = device.as<IMMEndpoint>();
+    EDataFlow flow = eAll;
+    winrt::check_hresult(endpoint->GetDataFlow(&flow));
+    if (flow != expected) throw winrt::hresult_invalid_argument(L"目标设备类型不匹配，请重新选择播放设备或麦克风。");
+    return audio_id(device);
+}
+}
 
 namespace platform {
+std::vector<AudioDevice> audio_devices(uint32_t flow) {
+    if (flow > 1) throw winrt::hresult_invalid_argument();
+    ApartmentScope apartment;
+    AudioDefaults defaults;
+    std::array<std::wstring, 3> current;
+    for (uint32_t role = 0; role < current.size(); ++role) {
+        try { current[role] = defaults.current(flow * 3 + role); }
+        catch (const winrt::hresult_error&) { }
+    }
+    winrt::com_ptr<IMMDeviceCollection> collection;
+    winrt::check_hresult(defaults.enumerator->EnumAudioEndpoints(static_cast<EDataFlow>(flow), DEVICE_STATE_ACTIVE, collection.put()));
+    uint32_t count = 0;
+    winrt::check_hresult(collection->GetCount(&count));
+    std::vector<AudioDevice> result;
+    for (uint32_t index = 0; index < count; ++index) {
+        winrt::com_ptr<IMMDevice> device;
+        winrt::check_hresult(collection->Item(index, device.put()));
+        DWORD state = 0;
+        winrt::check_hresult(device->GetState(&state));
+        if (state != DEVICE_STATE_ACTIVE) continue;
+        AudioDevice entry;
+        entry.id = audio_id(device);
+        winrt::com_ptr<IPropertyStore> properties;
+        winrt::check_hresult(device->OpenPropertyStore(STGM_READ, properties.put()));
+        constexpr PROPERTYKEY friendly_name{{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+        PropertyValue name;
+        winrt::check_hresult(properties->GetValue(friendly_name, &name.value));
+        entry.name = name.text();
+        if (entry.name.empty()) entry.name = entry.id;
+        for (uint32_t role = 0; role < current.size(); ++role) {
+            if (current[role] == entry.id) entry.default_roles |= 1u << role;
+        }
+        result.push_back(std::move(entry));
+    }
+    return result;
+}
+
+void restore_audio(std::wstring_view playback, std::wstring_view microphone) {
+    ApartmentScope apartment;
+    AudioDefaults defaults;
+    const auto playback_id = validated_audio_id(defaults, playback, eRender);
+    const auto microphone_id = validated_audio_id(defaults, microphone, eCapture);
+    restore_audio_devices(playback_id, microphone_id, defaults);
+}
+
 uint32_t submit_overlay(uint64_t handle, const winrt::com_ptr<ID3D11Texture2D>& texture,
     const winrt::com_ptr<ID3D11DeviceContext>& context) {
     vr::Texture_t descriptor{texture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto};

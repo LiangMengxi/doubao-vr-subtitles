@@ -1,15 +1,17 @@
 # 豆包VR字幕
 
-**创作者：凉梦曦** · **v0.2.5** · Windows 10 2004 / Windows 11 x64 · SteamVR
+**创作者：凉梦曦** · **v0.3.0** · Windows 10 2004 / Windows 11 x64 · SteamVR
+
+**v0.3.0** 新增一键恢复电脑播放设备与麦克风、自定义主题色、背景图片及背景不透明度。设置按分类点击展开。
 
 将豆包桌面版的实时字幕窗口捕获到 SteamVR 悬浮层。豆包负责识别和翻译，本程序只转发字幕画面，不读取麦克风、不上传字幕、不修改豆包或游戏。独立的非官方项目。
 
 ## 下载与安装
 
-在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.2.5) 下载：
+在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.3.0) 下载：
 
-- `DoubaoVR-v0.2.5-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
-- `DoubaoVR-v0.2.5-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
+- `DoubaoVR-v0.3.0-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
+- `DoubaoVR-v0.3.0-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
 - 两个包均提供 `.sha256` 校验文件。
 
 下载版已包含 .NET 与 WinUI 运行文件，不需要安装 Python、.NET SDK 或额外依赖管理器。需要另外安装并登录豆包桌面版；VR 显示需要 SteamVR 和头显，VRChat 不是必需依赖。
@@ -29,10 +31,10 @@
 
 ## 源码与构建
 
-v0.2.5 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上，透明边界检测仅回读 16 字节，桌面预览限制在 640×240、约 10 FPS。
+v0.3.0 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上，透明边界检测仅回读 16 字节，桌面预览限制在 640×240、约 10 FPS。
 
 - `native-rewrite/`：当前 C++ / WinUI 版本，包含固定依赖、测试及发布脚本。
-- `src/`、`tools/`、`installer/`：保留的旧 Python 版本及其打包工具，不是 v0.2.5 的构建入口。
+- `src/`、`tools/`、`installer/`：保留的旧 Python 版本及其打包工具，不是 v0.3.0 的构建入口。
 - `releases/`、`artifacts/`：本机发行文件与验证、备份资料，不进入源码提交。
 
 安装 PowerShell 7、.NET SDK 8.0.424 后，从仓库目录执行：
@@ -50,7 +52,7 @@ cd native-rewrite
 .\package-release.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
 
-需要 Inno Setup 6.7 或更新版本。脚本重新执行完整构建和测试，发布前备份源码及上一版程序，校验载荷与版本，不打包个人设置、日志、开发工具或调试符号。
+需要 Inno Setup 6.7 或更新版本。脚本重新执行完整构建和测试，发布前备份源码及上一版程序，校验载荷与版本，不打包 Markdown 文档、个人设置、日志、开发工具或调试符号；必要许可证以 TXT 保留，使用说明在源码仓库阅读。
 
 完整工程说明见 [重构工程](native-rewrite/README.md)，第三方许可见 [组件说明](native-rewrite/THIRD_PARTY_NOTICES.md)。
 

@@ -29,7 +29,7 @@ foreach ($line in Get-Content -LiteralPath (Join-Path $published 'SHA256SUMS.txt
     if ([IO.Path]::GetExtension($source) -notin $allowedExtensions -or
         $relative -match '(^|[\\/])(settings[^\\/]*|logs|artifacts|backups|dependencies|\.env[^\\/]*)([\\/]|$)') { throw "Unexpected payload: $relative" }
     if ((Get-FileHash -LiteralPath $source).Hash -ne $expectedHash) { throw "Publish checksum mismatch: $relative" }
-    if ([IO.Path]::GetExtension($source) -eq '.pdb' -or $relative -in @('README-NATIVE.md','THIRD_PARTY_NOTICES-NATIVE.md')) { continue }
+    if ([IO.Path]::GetExtension($source) -in @('.pdb','.md')) { continue }
     $target = Join-Path $payload $relative
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $target
@@ -38,10 +38,10 @@ foreach ($file in Get-ChildItem -LiteralPath $published -Recurse -File) {
     $relative = $file.FullName.Substring($published.Length + 1)
     if ($relative -ne 'SHA256SUMS.txt' -and -not $listed.Contains($relative)) { throw "Unlisted publish file: $relative" }
 }
-foreach ($document in @('README.md','USAGE.md','RELEASE_NOTES.md','VERSION')) {
+foreach ($document in @('VERSION')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot $document) -Destination (Join-Path $payload $document)
 }
-Copy-Item -LiteralPath (Join-Path $rewriteRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $payload 'THIRD_PARTY_NOTICES.md')
+Copy-Item -LiteralPath (Join-Path $rewriteRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $payload 'licenses\THIRD-PARTY-NOTICES.txt')
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'licenses\InnoSetup-LICENSE.txt') -Destination (Join-Path $payload 'licenses\InnoSetup-LICENSE.txt')
 foreach ($name in @('DoubaoVR.exe','DoubaoVR.Core.dll')) {
     $file = Get-Item -LiteralPath (Join-Path $payload $name)
@@ -51,6 +51,7 @@ foreach ($name in @('DoubaoVR.dll','DoubaoVR.deps.json','DoubaoVR.runtimeconfig.
     if (-not (Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "Missing runtime file: $name" }
 }
 if (Test-Path -LiteralPath (Join-Path $payload 'DoubaoVR.Desktop.exe')) { throw 'Stale application executable.' }
+if (Get-ChildItem -LiteralPath $payload -Recurse -File -Filter '*.md') { throw 'Release payload must not contain Markdown documents.' }
 $verification = [Collections.Generic.List[string]]::new()
 $verification.Add('procedure VerifyPayload;')
 $verification.Add('begin')
@@ -81,7 +82,7 @@ $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
     if ($archive.Entries.Count -ne $checksums.Count + 1) { throw 'ZIP entry count mismatch.' }
     foreach ($entry in $archive.Entries) {
-        if (-not $entry.FullName.StartsWith('DoubaoVR/') -or $entry.FullName -match '(^|/)(settings[^/]*|logs|artifacts|backups|dependencies|\.env[^/]*)(/|$)') { throw 'Unexpected ZIP entry.' }
+        if (-not $entry.FullName.StartsWith('DoubaoVR/') -or $entry.FullName -match '\.md$|(^|/)(settings[^/]*|logs|artifacts|backups|dependencies|\.env[^/]*)(/|$)') { throw 'Unexpected ZIP entry.' }
         $stream = $entry.Open()
         try {
             $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream))
@@ -98,4 +99,4 @@ foreach ($file in @($archivePath,$installerPath)) {
     "$digest  $(Split-Path $file -Leaf)" | Set-Content -LiteralPath ($file + '.sha256') -Encoding ascii
     Write-Host "$file`nSHA256 $digest"
 }
-Write-Host "Verified $($checksums.Count) payload files; runtime contains no personal settings, logs, development tools or debug symbols."
+Write-Host "Verified $($checksums.Count) payload files; runtime contains no Markdown documents, personal settings, logs, development tools or debug symbols."

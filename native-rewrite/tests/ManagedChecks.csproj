@@ -9,6 +9,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ManagedChecks.cs" />
+    <Compile Include="BackgroundChecks.cs" />
+    <Compile Include="../ui/BackgroundImageService.cs" Link="BackgroundImageService.cs" />
+    <Compile Include="../ui/AppearancePreferences.cs" Link="AppearancePreferences.cs" />
+    <Compile Include="../ui/AudioService.cs" Link="AudioService.cs" />
     <Compile Include="../ui/Settings.cs" Link="Settings.cs" />
     <Compile Include="../ui/ClosePolicy.cs" Link="ClosePolicy.cs" />
     <Compile Include="../ui/DoubaoExitService.cs" Link="DoubaoExitService.cs" />

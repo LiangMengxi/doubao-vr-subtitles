@@ -5,9 +5,18 @@
 #include <array>
 #include <span>
 #include <string_view>
+#include <string>
 #include <vector>
 
 namespace platform {
+struct AudioDevice {
+    std::wstring id;
+    std::wstring name;
+    uint32_t default_roles = 0;
+};
+std::vector<AudioDevice> audio_devices(uint32_t flow);
+void restore_audio(std::wstring_view playback, std::wstring_view microphone);
+
 class ApartmentScope {
 public:
     explicit ApartmentScope(winrt::apartment_type type = winrt::apartment_type::multi_threaded) { winrt::init_apartment(type); }

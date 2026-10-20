@@ -13,6 +13,57 @@ if (args is ["--exit-target"]) { await Task.Delay(TimeSpan.FromMinutes(1)); retu
 Require(Marshal.SizeOf<BridgeOptions>() == 52, "Options ABI size differs from C++.");
 Require(Marshal.OffsetOf<BridgeOptions>(nameof(BridgeOptions.Yaw)).ToInt32() == 28, "Yaw ABI offset differs from C++.");
 Require(Marshal.SizeOf<BridgeStats>() == 40, "Stats ABI size differs from C++.");
+Require(Marshal.SizeOf<AudioDeviceNative>() == 1540 && Marshal.SizeOf<AudioDevicesNative>() == 197128 && Marshal.SizeOf<AudioTargetNative>() == 2052, "Audio ABI layout mismatch.");
+Require(Marshal.OffsetOf<AudioTargetNative>(nameof(AudioTargetNative.MicrophoneId)).ToInt32() == 1028, "Microphone ABI offset mismatch.");
+Require(Rgb.TryParse("#aB00fF", out var accent) && accent.Hex == "#AB00FF", "Theme color parsing failed.");
+foreach (var invalidColor in new[] { "", "red", "#FFF", "#FF0000FF", "#-00000", "#12ZZ00" }) Require(!Rgb.TryParse(invalidColor, out _), "Invalid theme color accepted.");
+Require(new Rgb(255, 255, 255).UseBlackText && !new Rgb(0, 0, 0).UseBlackText, "Accent foreground contrast failed.");
+Require(new Rgb(0, 0, 0).ReadableOn(new Rgb(32, 32, 32)).Contrast(new Rgb(32, 32, 32)) >= 4.5
+    && new Rgb(255, 255, 255).ReadableOn(new Rgb(255, 255, 255)).Contrast(new Rgb(255, 255, 255)) >= 4.5, "Accent text must remain readable in light and dark themes.");
+var appearance = new Settings { AccentColor = "#aB00fF", BackgroundOpacity = float.NaN, BackgroundImage = "../../private.png", AudioTargetId = "invalid\0device", MicrophoneTargetId = new string('x', 512), MicrophoneTargetName = new string('x', 256) };
+appearance.Normalize();
+Require(appearance.AccentColor == "#AB00FF" && appearance.BackgroundOpacity == .3f && appearance.BackgroundImage == "" && appearance.AudioTargetId == "", "Appearance/audio input normalization failed.");
+Require(appearance.MicrophoneTargetId == "" && appearance.MicrophoneTargetName == "", "Microphone input normalization failed.");
+var outputOnly = JsonSerializer.Deserialize<Settings>("{\"audio_target_id\":\"existing-speaker\",\"audio_target_name\":\"Speakers\"}")!;
+Require(outputOnly.AudioTargetId == "existing-speaker" && outputOnly.MicrophoneTargetId == "", "Old playback selection must survive without selecting a microphone automatically.");
+var imageSize = BackgroundFiles.Size(4000, 3000, 1024);
+Require(imageSize.Width == 1600 && imageSize.Height == 1200 && BackgroundFiles.Size(400, 300, 1024) == (400u, 300u), "Background scaling must be bounded and preserve aspect ratio.");
+foreach (var invalidImage in new[] { (0u, 20u, 1024L), (8000u, 8000u, 1024L), (100u, 100u, 30L * 1024 * 1024) })
+{
+    bool rejected = false;
+    try { BackgroundFiles.Size(invalidImage.Item1, invalidImage.Item2, invalidImage.Item3); }
+    catch (InvalidDataException) { rejected = true; }
+    Require(rejected, "Oversized image dimensions/size accepted.");
+}
+string imageFolder = Path.Combine(Path.GetTempPath(), "DoubaoVR-BackgroundChecks-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(Path.Combine(imageFolder, "backgrounds"));
+try
+{
+    string currentImage = Guid.NewGuid().ToString("N") + ".png";
+    string backupImage = Guid.NewGuid().ToString("N") + ".png";
+    string staleImage = Guid.NewGuid().ToString("N") + ".png";
+    foreach (var name in new[] { currentImage, backupImage, staleImage, "user-original.png" }) File.WriteAllText(Path.Combine(imageFolder, "backgrounds", name), "controlled fixture");
+    File.WriteAllText(Path.Combine(imageFolder, "settings.json.bak"), JsonSerializer.Serialize(new Settings { BackgroundImage = backupImage }));
+    BackgroundFiles.Cleanup(imageFolder, currentImage);
+    Require(File.Exists(BackgroundFiles.Resolve(imageFolder, currentImage)) && File.Exists(BackgroundFiles.Resolve(imageFolder, backupImage)), "Current/backup images must remain intact.");
+    Require(!File.Exists(BackgroundFiles.Resolve(imageFolder, staleImage)) && File.Exists(Path.Combine(imageFolder, "backgrounds", "user-original.png")), "Only obsolete app-owned images may be cleaned.");
+    File.WriteAllText(BackgroundFiles.Resolve(imageFolder, staleImage), "controlled fixture");
+    File.WriteAllText(Path.Combine(imageFolder, "settings.json.bak"), "[]");
+    BackgroundFiles.Cleanup(imageFolder, currentImage);
+    Require(File.Exists(BackgroundFiles.Resolve(imageFolder, staleImage)), "An unreadable backup must prevent image cleanup.");
+    var appearanceSaved = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(new Settings { AccentColor = "#112233", BackgroundImage = currentImage, BackgroundOpacity = .6f, AudioTargetId = "speaker-id", AudioTargetName = "Speakers", MicrophoneTargetId = "microphone-id", MicrophoneTargetName = "Microphone" }))!;
+    Require(appearanceSaved.BackgroundImage == currentImage && appearanceSaved.BackgroundOpacity == .6f && appearanceSaved.AudioTargetId == "speaker-id" && appearanceSaved.AccentColor == "#112233", "New preference persistence failed.");
+    Require(appearanceSaved.MicrophoneTargetId == "microphone-id" && appearanceSaved.MicrophoneTargetName == "Microphone", "Microphone preference persistence failed.");
+}
+finally
+{
+    foreach (var path in Directory.EnumerateFiles(Path.Combine(imageFolder, "backgrounds"))) File.Delete(path);
+    File.Delete(Path.Combine(imageFolder, "settings.json.bak"));
+    Directory.Delete(Path.Combine(imageFolder, "backgrounds"));
+    Directory.Delete(imageFolder);
+}
+Console.WriteLine("PASS: accent validation, foreground contrast, bounded image scaling, owned-file isolation and background/audio persistence.");
+await BackgroundChecks.RunAsync();
 Require(ShortcutService.Parse("Alt+Z").SequenceEqual(new ushort[] { 0x12, 0x5a }), "Alt+Z parsing failed.");
 Require(ShortcutService.Parse("Ctrl+Shift+F24").SequenceEqual(new ushort[] { 0x11, 0x10, 0x87 }), "Function key parsing failed.");
 foreach (var invalid in new[] { "Z", "Ctrl+Ctrl+Z", "Win+Z", "Alt+F25", "Alt+", "Ctrl+Shift+Alt+Z+X" })
@@ -79,7 +130,44 @@ if (args.Length > 0)
     var corePath = Path.GetFullPath(args[0]);
     NativeLibrary.SetDllImportResolver(typeof(NativeBridge).Assembly, (name, _, _) =>
         name == "DoubaoVR.Core.dll" ? NativeLibrary.Load(corePath) : 0);
-    Require(NativeBridge.Version() == 3, "Core ABI version differs.");
+    Require(NativeBridge.Version() == 5, "Core ABI version differs.");
+    var audioError = AudioService.Error();
+    var invalidAudio = new AudioDevicesNative { Size = 1, Devices = new AudioDeviceNative[128] };
+    Require(AudioService.ReadDevices(AudioFlow.Playback, ref invalidAudio, ref audioError) < 0, "Invalid audio structure size must be rejected.");
+    invalidAudio.Size = (uint)Marshal.SizeOf<AudioDevicesNative>();
+    Require(AudioService.ReadDevices((AudioFlow)2, ref invalidAudio, ref audioError) < 0, "Invalid audio direction must be rejected.");
+    var invalidTarget = new AudioTargetNative { Size = 2052, PlaybackId = "", MicrophoneId = "" };
+    Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "Empty audio target must be rejected without changing defaults.");
+    var audioBefore = AudioService.Devices(AudioFlow.Playback);
+    var microphonesBefore = AudioService.Devices(AudioFlow.Microphone);
+    string missingDevice = "DoubaoVR-invalid-device-" + Guid.NewGuid().ToString("N");
+    invalidTarget.PlaybackId = missingDevice;
+    Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "Missing audio target must not select a fallback device.");
+    invalidTarget.MicrophoneId = missingDevice;
+    invalidTarget.PlaybackId = audioBefore.FirstOrDefault()?.Id ?? "";
+    Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "An invalid microphone must reject the entire request before changing playback.");
+    invalidTarget.PlaybackId = missingDevice;
+    invalidTarget.MicrophoneId = microphonesBefore.FirstOrDefault()?.Id ?? "";
+    Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "An invalid playback device must not change the microphone.");
+    if (audioBefore.Count > 0)
+    {
+        invalidTarget.PlaybackId = "";
+        invalidTarget.MicrophoneId = audioBefore[0].Id;
+        Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "Playback endpoints must not be accepted as microphones.");
+    }
+    if (microphonesBefore.Count > 0)
+    {
+        invalidTarget.PlaybackId = microphonesBefore[0].Id;
+        invalidTarget.MicrophoneId = "";
+        Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "Microphones must not be accepted as playback endpoints.");
+    }
+    invalidTarget.Size = 1028;
+    Require(AudioService.RestoreDevice(invalidTarget, ref audioError) < 0, "Old audio request sizes must be rejected.");
+    var audioAfter = AudioService.Devices(AudioFlow.Playback);
+    var microphonesAfter = AudioService.Devices(AudioFlow.Microphone);
+    Require(audioBefore.Count == audioAfter.Count && audioBefore.Zip(audioAfter).All(pair => pair.First.Id == pair.Second.Id && pair.First.DefaultRoles == pair.Second.DefaultRoles), "Invalid switching must preserve playback defaults.");
+    Require(microphonesBefore.Count == microphonesAfter.Count && microphonesBefore.Zip(microphonesAfter).All(pair => pair.First.Id == pair.Second.Id && pair.First.DefaultRoles == pair.Second.DefaultRoles), "Invalid switching must preserve microphone defaults.");
+    Console.WriteLine($"PASS: audio ABI, read-only enumeration ({audioAfter.Count} playback / {microphonesAfter.Count} microphone devices), invalid/missing/wrong-direction targets and unchanged system defaults.");
     using var bridge = new BridgeHandle();
     Require(!bridge.IsInvalid, "Core allocation failed.");
     Require(NativeBridge.Stats(bridge).State == 0, "A new core must be stopped.");
