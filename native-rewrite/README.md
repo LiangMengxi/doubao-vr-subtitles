@@ -15,7 +15,7 @@
 
 ## 使用
 
-普通源码构建后的程序位于 `ui/bin/Release/net8.0-windows10.0.19041.0/win-x64/DoubaoVR.exe`；经过完整本地验收的发布目录为 `out/app/`。完整保留同目录下的 DLL 和资源文件，不能单独复制 EXE。仓库根目录的 `start.cmd` 优先启动最新的源码构建，不会回退到旧 Python 程序。
+普通源码构建后的程序位于 `ui/bin/Release/net8.0-windows10.0.19041.0/win-x64/DoubaoVR.exe`；经过完整本地验收的发布目录为 `out/app/`。完整保留同目录下的 DLL 和资源文件，不能单独复制 EXE。仓库 `scripts/start.cmd` 优先启动最新的源码构建，不会回退到旧 Python 程序。
 
 先在豆包完成登录和实时字幕快捷键设置。点击“开启字幕”，再点击“开启VR”。字幕大小每次加减 5%，距离每次加减 0.1 米；可直接使用大小、距离档位。左右、上下、不透明度提供加减按钮。“上下倾斜”和“左右倾斜”分别控制俯仰和绕竖轴转向，范围均为 ±45°，每次 1°，可分别归零。两种倾斜可同时生效，不改变字幕中心位置。
 
@@ -47,7 +47,7 @@ cd native-rewrite
 
 不使用 vcpkg、Conan、npm、pip 或额外依赖管理器。原生依赖由 PowerShell 直接从固定上游地址下载并验证 SHA256，CMake 只消费本地 SDK。C# 仅使用 .NET 自带 NuGet 恢复 Microsoft 官方组件，使用精确版本和 `packages.lock.json`。开发工具留在 `dependencies/`，不修改系统环境或注册表，不进入发布目录。
 
-`-UiOnly` 可单独构建界面，但不能替代完整验收。维护者使用 `-Publish` 或打包脚本时必须备有完整本地验证资料，缺少资料会终止发布；正式程序不编入动效测试类。从仓库根目录也可使用 `build.ps1` 和 `package-release.ps1`，它们调用本目录的同一套流程。`scripts/backup-source.ps1` 创建带 SHA256 清单的本地备份，包含当前工程、必要根文件以及本机已有的验证资料；这些私有备份不提交到 GitHub。
+`-UiOnly` 可单独构建界面，但不能替代完整验收。维护者使用 `-Publish` 或打包脚本时必须备有完整本地验证资料，缺少资料会终止发布；正式程序不编入动效测试类。从仓库根目录也可使用 `scripts/build.ps1` 和 `scripts/package-release.ps1`，它们调用本目录的同一套流程。本目录的 `scripts/backup-source.ps1` 创建带 SHA256 清单的本地备份，包含当前工程、公共入口、文档以及本机已有的验证资料；这些私有备份不提交到 GitHub。
 
 ## 内存和资源约束
 

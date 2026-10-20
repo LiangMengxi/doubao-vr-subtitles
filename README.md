@@ -27,14 +27,15 @@
 
 新配置和日志位于 `%LOCALAPPDATA%\DoubaoVR.Native`。首次运行可读取旧版 `%LOCALAPPDATA%\DoubaoVR\settings.json`，不修改旧配置。安装、升级和卸载不清空这两个配置目录。
 
-详细操作和排错见 [使用说明](USAGE.md)。
+详细操作和排错见 [使用说明](docs/USAGE.md)，版本变更见 [发布说明](docs/RELEASE_NOTES.md)。
 
 ## 源码与构建
 
 v0.3.0 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上，透明边界检测仅回读 16 字节，桌面预览限制在 640×240、约 10 FPS。
 
 - `native-rewrite/`：当前 C++ / WinUI 版本，包含程序源码、固定依赖声明、构建及发布脚本。
-- `build.ps1`、`package-release.ps1`、`start.cmd`：仓库根目录统一的构建、打包和启动入口。
+- `scripts/`：统一的构建、打包和启动入口。
+- `docs/`：使用说明、发布说明与维护者发布流程。
 - `VERSION`：当前版本号的唯一来源，C++、C# 和发布脚本共同读取。
 - `releases/`、`artifacts/`：本机发行文件与验证、备份资料，不进入源码提交。
 
@@ -43,7 +44,7 @@ v0.3.0 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上�
 安装 PowerShell 7、.NET SDK 8.0.424 后，从仓库目录执行：
 
 ```powershell
-.\build.ps1 -PrepareToolchain
+.\scripts\build.ps1 -PrepareToolchain
 ```
 
 已有 MSVC 2022 C++、Windows SDK 与 CMake 时可省略 `-PrepareToolchain`。不使用 vcpkg、Conan、npm、pip 或额外依赖管理器。公开源码可独立构建，不要求本地测试目录；始终执行依赖校验、内存规范和编译警告检查。源码构建产物位于 `native-rewrite/ui/bin/Release/net8.0-windows10.0.19041.0/win-x64/DoubaoVR.exe`。
@@ -51,12 +52,12 @@ v0.3.0 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上�
 维护者准备好完整的本地验证资料后，可生成 ZIP、安装 EXE 及 SHA256：
 
 ```powershell
-.\package-release.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+.\scripts\package-release.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
 
 需要 Inno Setup 6.7 或更新版本。正式发布必须执行本地 GPU、跨语言接口与动效验收，缺少验证资料会明确终止，不会将跳过测试视为通过。发布前备份源码及上一版程序，正式程序不编入动效测试类；发行包不包含 Markdown 文档、个人设置、日志、开发工具或调试符号，必要许可证以 TXT 保留。
 
-构建后可双击根目录的 `start.cmd` 启动当前版本，不会回退运行本机保留的 Python 程序。完整工程说明见 [工程说明](native-rewrite/README.md)，第三方许可见 [组件说明](THIRD_PARTY_NOTICES.md)。
+构建后可双击 `scripts/start.cmd` 启动当前版本，不会回退运行本机保留的 Python 程序。完整工程说明见 [工程说明](native-rewrite/README.md)，发布流程见 [发布约定](docs/RELEASING.md)，第三方许可见 [组件说明](THIRD_PARTY_NOTICES.md)。
 
 ## 兼容性说明
 

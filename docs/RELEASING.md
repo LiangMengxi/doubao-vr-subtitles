@@ -1,6 +1,6 @@
 # 发布约定
 
-从仓库根目录使用 `package-release.ps1 -Iscc <ISCC.exe>` 构建发行包，内部统一调用 `native-rewrite/package-release.ps1`。主程序保持名为 `DoubaoVR.exe`，原安装器 AppId 不变。根目录 `VERSION` 是版本号的唯一来源，C++、C#、安装器与发布文件共同使用该版本。
+从仓库根目录使用 `scripts/package-release.ps1 -Iscc <ISCC.exe>` 构建发行包，内部统一调用 `native-rewrite/package-release.ps1`。主程序保持名为 `DoubaoVR.exe`，原安装器 AppId 不变。根目录 `VERSION` 是版本号的唯一来源，C++、C#、安装器与发布文件共同使用该版本。
 
 主分支不保留旧 Python 工程、测试代码、验证记录或开发指令文件；旧版源码通过 v0.2.4 标签和本地备份查阅。中文安装资源位于 `native-rewrite/installer/ChineseSimplified.isl`，当前构建不依赖旧 Python 工程目录。普通源码构建不要求本地测试资料；正式发布使用维护者本地的完整验证流程，缺少资料时必须终止发布，不允许静默跳过。动效测试类仅用于本地验证构建，不编入正式程序。
 
