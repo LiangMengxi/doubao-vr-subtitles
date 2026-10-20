@@ -50,7 +50,7 @@ VersionInfoVersion={#AppVersion}.0
 VersionInfoDescription=豆包VR字幕安装程序
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "..\..\installer\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

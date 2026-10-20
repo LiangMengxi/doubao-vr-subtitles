@@ -1,5 +1,7 @@
-Tcl/Tk 8.6 license texts retained for Windows release packaging when the Python installation omits them.
+# Current license sources
 
-- Tcl 8.6.15: https://github.com/tcltk/tcl/blob/core-8-6-15/license.terms
-- Tk: copied from the local Python 3.12 distribution, `tcl/tk8.6/license.terms`; upstream: https://github.com/tcltk/tk/blob/core-8-6-branch/license.terms
-- Valve OpenVR: https://github.com/ValveSoftware/openvr/blob/master/LICENSE (the SDK runtime library, separate from Python bindings).
+- `InnoSetup-LICENSE.txt`: license text for the installer compiler and bootstrapper. Copied into the release payload by `native-rewrite/package-release.ps1`.
+- `OpenVR-LICENSE.txt`: Valve OpenVR SDK BSD 3-Clause license. The application also includes the exact license from the pinned SDK during its build.
+- .NET and Windows App SDK licenses and notices are copied from the pinned runtime packages when publishing; see `../THIRD_PARTY_NOTICES.md`.
+
+Legacy Python and Tcl/Tk license material remains in the v0.2.4 Git tag and local backups. It is not used by the current application.

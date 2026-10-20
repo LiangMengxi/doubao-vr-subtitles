@@ -5,8 +5,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $rewriteRoot = $PSScriptRoot
 $repositoryRoot = Split-Path $rewriteRoot -Parent
-$version = (Get-Content -LiteralPath (Join-Path $rewriteRoot 'VERSION') -Raw).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+$' -or $version -ne (Get-Content -LiteralPath (Join-Path $repositoryRoot 'VERSION') -Raw).Trim()) { throw 'Release versions must match.' }
+$version = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'VERSION') -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION must contain three numeric components.' }
 $compiler = Get-Item -LiteralPath $Iscc
 $releaseRoot = [IO.Path]::GetFullPath($ReleaseDirectory)
 if (-not $releaseRoot.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Release output must stay inside the repository.' }

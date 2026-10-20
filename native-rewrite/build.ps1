@@ -2,6 +2,10 @@ param([switch]$PrepareToolchain, [switch]$UiOnly, [switch]$Publish)
 $ErrorActionPreference = 'Stop'
 if ($UiOnly -and $Publish) { throw 'Publishing requires a complete native build and all automated checks.' }
 $rewriteRoot = $PSScriptRoot
+$validationScript = Join-Path $rewriteRoot 'tests\RunChecks.ps1'
+$runChecks = -not $UiOnly -and (Test-Path -LiteralPath $validationScript)
+if ($Publish -and -not $runChecks) { throw 'Publishing requires the complete local validation suite; public source builds do not include developer tests.' }
+$testConfiguration = if ($runChecks) { 'ON' } else { 'OFF' }
 Push-Location -LiteralPath $rewriteRoot
 $savedPath = $env:PATH
 $savedInclude = $env:INCLUDE
@@ -20,14 +24,15 @@ try {
         if (Test-Path -LiteralPath $localCompilerRoot) {
             $compilerRoot = (Get-ChildItem -LiteralPath $localCompilerRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
             $sdkRoot = Join-Path $rewriteRoot 'dependencies\sdk\c'
+            $cmakeSdkRoot = $sdkRoot.Replace('\', '/')
             $sdkInclude = (Get-ChildItem -LiteralPath (Join-Path $sdkRoot 'Include') -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
             $sdkVersion = Split-Path $sdkInclude -Leaf
             $env:PATH = "$compilerRoot\bin\Hostx64\x64;$rewriteRoot\dependencies\cmake\bin;$sdkRoot\bin\$sdkVersion\x64;$savedPath"
             $env:INCLUDE = "$compilerRoot\include;$sdkInclude\ucrt;$sdkInclude\um;$sdkInclude\shared;$sdkInclude\winrt;$sdkInclude\cppwinrt"
             $env:LIB = "$compilerRoot\lib\x64;$sdkRoot\ucrt\x64;$sdkRoot\um\x64"
-            cmake -S . -B out/core -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MT=$sdkRoot/bin/$sdkVersion/x64/mt.exe" "-DCMAKE_RC_COMPILER=$sdkRoot/bin/$sdkVersion/x64/rc.exe"
+            cmake -S . -B out/core -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release "-DBUILD_TESTING=$testConfiguration" "-DCMAKE_MT=$cmakeSdkRoot/bin/$sdkVersion/x64/mt.exe" "-DCMAKE_RC_COMPILER=$cmakeSdkRoot/bin/$sdkVersion/x64/rc.exe"
         } elseif (Get-Command cmake -ErrorAction SilentlyContinue) {
-            cmake -S . -B out/core -A x64
+            cmake -S . -B out/core -A x64 "-DBUILD_TESTING=$testConfiguration"
         } else {
             throw 'C++ build tools were not found. Run .\build.ps1 -PrepareToolchain, or use a Visual Studio 2022 C++ developer shell with CMake.'
         }
@@ -37,20 +42,9 @@ try {
     }
     dotnet restore ui/DoubaoVR.Desktop.csproj --locked-mode
     if ($LASTEXITCODE -ne 0) { throw 'Locked WinUI dependency restore failed.' }
-    dotnet build ui/DoubaoVR.Desktop.csproj -c Release --no-restore
+    dotnet build ui/DoubaoVR.Desktop.csproj -c Release --no-restore "-p:EnableDeveloperChecks=$($runChecks.ToString().ToLowerInvariant())"
     if ($LASTEXITCODE -ne 0) { throw 'WinUI build failed.' }
-    if (-not $UiOnly) {
-        ctest --test-dir out/core -C Release --output-on-failure
-        if ($LASTEXITCODE -ne 0) { throw 'GPU tests failed.' }
-        dotnet run --project tests/ManagedChecks.csproj -c Release -- out/core/Release/DoubaoVR.Core.dll
-        if ($LASTEXITCODE -ne 0) { throw 'Managed ABI and lifecycle tests failed.' }
-        $motionCheck = Start-Process -FilePath (Join-Path $rewriteRoot 'ui\bin\Release\net8.0-windows10.0.19041.0\win-x64\DoubaoVR.exe') -ArgumentList '--settings-motion-test' -WindowStyle Hidden -PassThru
-        try {
-            if (-not $motionCheck.WaitForExit(30000)) { $motionCheck.Kill(); throw 'Settings motion checks timed out.' }
-            if ($motionCheck.ExitCode -ne 0) { throw 'Settings motion checks failed. See the application log for per-frame layout results.' }
-            Write-Host 'PASS: synchronized settings motion, interruption and resize checks.'
-        } finally { $motionCheck.Dispose() }
-    }
+    if ($runChecks) { & $validationScript }
     if ($Publish) {
         & (Join-Path $rewriteRoot 'scripts\backup-source.ps1')
         $publishStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
@@ -60,7 +54,7 @@ try {
         foreach ($targetPath in @($stagingRoot, $applicationRoot, $previousRoot)) {
             if (-not $targetPath.StartsWith($rewriteRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Publish path escaped the rewrite workspace.' }
         }
-        dotnet publish ui/DoubaoVR.Desktop.csproj -c Release --no-restore -o $stagingRoot
+        dotnet publish ui/DoubaoVR.Desktop.csproj -c Release --no-restore -p:EnableDeveloperChecks=false -o $stagingRoot
         if ($LASTEXITCODE -ne 0) { throw 'WinUI publish failed.' }
         $publishedCore = Join-Path $stagingRoot 'DoubaoVR.Core.dll'
         if (-not (Test-Path -LiteralPath $publishedCore)) { throw 'Published app is missing the native core.' }

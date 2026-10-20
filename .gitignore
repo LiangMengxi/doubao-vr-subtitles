@@ -24,3 +24,13 @@ Thumbs.db
 /inspect_overlay.py
 /VALIDATION.md
 /assets/branding/
+
+# Original Python project retained locally; archived in Git history, not maintained on main.
+/src/
+/tools/
+/installer/
+/assets/
+/requirements.txt
+/setup.cmd
+/licenses/tcl8.6-license.terms
+/licenses/tk8.6-license.terms

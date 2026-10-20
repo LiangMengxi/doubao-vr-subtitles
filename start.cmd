@@ -1,12 +1,11 @@
 @echo off
-cd /d "%~dp0"
-if exist "dist\DoubaoVR\DoubaoVR.exe" (
-    start "" "dist\DoubaoVR\DoubaoVR.exe"
-    exit /b
-)
-if not exist ".venv\Scripts\pythonw.exe" (
-    echo Please run setup.cmd first.
+setlocal
+set "APP_DIR=%~dp0native-rewrite\ui\bin\Release\net8.0-windows10.0.19041.0\win-x64"
+if not exist "%APP_DIR%\DoubaoVR.exe" set "APP_DIR=%~dp0native-rewrite\out\app"
+if not exist "%APP_DIR%\DoubaoVR.exe" (
+    echo Build the current application first:
+    echo pwsh -NoProfile -File "%~dp0build.ps1" -PrepareToolchain
     pause
     exit /b 1
 )
-start "" ".venv\Scripts\pythonw.exe" "src\app.py"
+start "" /D "%APP_DIR%" "%APP_DIR%\DoubaoVR.exe"

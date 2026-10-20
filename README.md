@@ -33,28 +33,30 @@
 
 v0.3.0 使用 C++20 图形核心与 C# WinUI 3 界面。VR 图像留在 GPU 上，透明边界检测仅回读 16 字节，桌面预览限制在 640×240、约 10 FPS。
 
-- `native-rewrite/`：当前 C++ / WinUI 版本，包含固定依赖、测试及发布脚本。
-- `src/`、`tools/`、`installer/`：保留的旧 Python 版本及其打包工具，不是 v0.3.0 的构建入口。
+- `native-rewrite/`：当前 C++ / WinUI 版本，包含程序源码、固定依赖声明、构建及发布脚本。
+- `build.ps1`、`package-release.ps1`、`start.cmd`：仓库根目录统一的构建、打包和启动入口。
+- `VERSION`：当前版本号的唯一来源，C++、C# 和发布脚本共同读取。
 - `releases/`、`artifacts/`：本机发行文件与验证、备份资料，不进入源码提交。
+
+主分支只维护当前程序及其必要构建资料，不提交测试代码、验证记录或开发指令文件。旧 Python 工程及其打包工具已从主分支移出，完整源码可在 [v0.2.4 标签](https://github.com/LiangMengxi/doubao-vr-subtitles/tree/v0.2.4) 中查阅；本地已有旧源码、测试资料和备份不受影响。
 
 安装 PowerShell 7、.NET SDK 8.0.424 后，从仓库目录执行：
 
 ```powershell
-cd native-rewrite
-.\build.ps1 -PrepareToolchain -Publish
+.\build.ps1 -PrepareToolchain
 ```
 
-已有 MSVC 2022 C++、Windows SDK 与 CMake 时可省略 `-PrepareToolchain`。不使用 vcpkg、Conan、npm、pip 或额外依赖管理器。构建执行依赖校验、编译警告检查、GPU 测试及跨语言接口测试；产物位于 `native-rewrite/out/app/DoubaoVR.exe`。
+已有 MSVC 2022 C++、Windows SDK 与 CMake 时可省略 `-PrepareToolchain`。不使用 vcpkg、Conan、npm、pip 或额外依赖管理器。公开源码可独立构建，不要求本地测试目录；始终执行依赖校验、内存规范和编译警告检查。源码构建产物位于 `native-rewrite/ui/bin/Release/net8.0-windows10.0.19041.0/win-x64/DoubaoVR.exe`。
 
-生成 ZIP、安装 EXE 及 SHA256：
+维护者准备好完整的本地验证资料后，可生成 ZIP、安装 EXE 及 SHA256：
 
 ```powershell
 .\package-release.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
 
-需要 Inno Setup 6.7 或更新版本。脚本重新执行完整构建和测试，发布前备份源码及上一版程序，校验载荷与版本，不打包 Markdown 文档、个人设置、日志、开发工具或调试符号；必要许可证以 TXT 保留，使用说明在源码仓库阅读。
+需要 Inno Setup 6.7 或更新版本。正式发布必须执行本地 GPU、跨语言接口与动效验收，缺少验证资料会明确终止，不会将跳过测试视为通过。发布前备份源码及上一版程序，正式程序不编入动效测试类；发行包不包含 Markdown 文档、个人设置、日志、开发工具或调试符号，必要许可证以 TXT 保留。
 
-完整工程说明见 [重构工程](native-rewrite/README.md)，第三方许可见 [组件说明](native-rewrite/THIRD_PARTY_NOTICES.md)。
+构建后可双击根目录的 `start.cmd` 启动当前版本，不会回退运行本机保留的 Python 程序。完整工程说明见 [工程说明](native-rewrite/README.md)，第三方许可见 [组件说明](THIRD_PARTY_NOTICES.md)。
 
 ## 兼容性说明
 

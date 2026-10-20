@@ -17,9 +17,10 @@
     <ApplicationIcon>..\assets\bridge.ico</ApplicationIcon>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <DefineConstants Condition="'$(EnableDeveloperChecks)' == 'true'">$(DefineConstants);DEVELOPER_CHECKS</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\tests\SettingsMotionChecks.cs" Link="SettingsMotionChecks.cs" />
+    <Compile Include="..\tests\SettingsMotionChecks.cs" Link="SettingsMotionChecks.cs" Condition="'$(EnableDeveloperChecks)' == 'true'" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="[1.7.250606001]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.7705]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="[1.7.251221100]" />

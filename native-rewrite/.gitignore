@@ -5,3 +5,6 @@ out/
 dependencies/
 backups/
 *.user
+/tests/
+/VALIDATION.md
+/AGENTS.md

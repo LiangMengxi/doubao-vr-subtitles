@@ -28,14 +28,18 @@ if ($SelfTest) {
 }
 
 $failures = @()
-$nativeFiles = Get-ChildItem -LiteralPath (Join-Path $rewriteRoot 'core'),(Join-Path $rewriteRoot 'tests') -Recurse -File | Where-Object { $_.Extension -in '.cpp','.h' -and $_.FullName -notmatch '\\(bin|obj)\\' }
+$nativeRoots = @((Join-Path $rewriteRoot 'core'))
+$managedRoots = @((Join-Path $rewriteRoot 'ui'))
+$localTests = Join-Path $rewriteRoot 'tests'
+if (Test-Path -LiteralPath $localTests) { $nativeRoots += $localTests; $managedRoots += $localTests }
+$nativeFiles = Get-ChildItem -LiteralPath $nativeRoots -Recurse -File | Where-Object { $_.Extension -in '.cpp','.h' -and $_.FullName -notmatch '\\(bin|obj)\\' }
 foreach ($file in $nativeFiles) {
     $relative = $file.FullName.Substring($rewriteRoot.Length + 1)
     foreach ($issue in @(Get-NativePolicyErrors (Get-Content -LiteralPath $file.FullName -Raw) ($relative -eq 'core\platform.cpp'))) {
         $failures += $relative + ': ' + $issue
     }
 }
-$managedFiles = Get-ChildItem -LiteralPath (Join-Path $rewriteRoot 'ui'),(Join-Path $rewriteRoot 'tests') -Recurse -File -Filter '*.cs' | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
+$managedFiles = Get-ChildItem -LiteralPath $managedRoots -Recurse -File -Filter '*.cs' | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
 foreach ($file in $managedFiles) {
     $source = Get-Content -LiteralPath $file.FullName -Raw
     if ($source -match '\bunsafe\b|DangerousGetHandle|DangerousAddRef|AcquirePointer') { $failures += $file.Name + ': unsafe managed memory access' }
@@ -43,7 +47,7 @@ foreach ($file in $managedFiles) {
 }
 $cmake = Get-Content -LiteralPath (Join-Path $rewriteRoot 'CMakeLists.txt') -Raw
 if ($cmake -match 'FetchContent|ExternalProject|vcpkg|conan|CPMAddPackage') { $failures += 'CMake must consume the local verified SDK directly.' }
-foreach ($project in Get-ChildItem -LiteralPath (Join-Path $rewriteRoot 'ui'),(Join-Path $rewriteRoot 'tests') -Filter '*.csproj') {
+foreach ($project in Get-ChildItem -LiteralPath $managedRoots -Filter '*.csproj') {
     [xml]$xml = Get-Content -LiteralPath $project.FullName -Raw
     foreach ($reference in $xml.SelectNodes('//PackageReference')) {
         if ($reference.Version -notmatch '^\[\d+\.\d+\.[\d.]+\]$') { $failures += $project.Name + ': package version must be exact: ' + $reference.Include }

@@ -13,7 +13,10 @@ internal static class Program
     private static void Main(string[] arguments)
     {
         Log.Write("Starting WinUI desktop.");
-        bool motionTest = arguments.Contains("--settings-motion-test");
+        bool motionTest = false;
+#if DEVELOPER_CHECKS
+        motionTest = arguments.Contains("--settings-motion-test");
+#endif
         string suffix = motionTest ? ".MotionChecks" : "";
         instance = new Mutex(true, @"Local\DoubaoVR.Native.Desktop" + suffix, out bool created);
         RestoreEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DoubaoVR.Native.Restore" + suffix);
@@ -27,7 +30,7 @@ internal static class Program
             {
                 Log.Write("Application dispatcher initialized.");
                 SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
-                _ = new BridgeApplication(arguments.Contains("--smoke-test"), motionTest);
+                _ = new BridgeApplication(arguments.Contains("--smoke-test"));
             });
         }
         catch (Exception exception) { Log.Write(exception.ToString()); throw; }
@@ -39,12 +42,10 @@ public sealed partial class BridgeApplication : Application
 {
     private Window? window;
     private readonly bool smokeTest;
-    private readonly bool motionTest;
-    public BridgeApplication(bool smokeTest, bool motionTest = false)
+    public BridgeApplication(bool smokeTest)
     {
         Log.Write("Creating application resources.");
         this.smokeTest = smokeTest;
-        this.motionTest = motionTest;
         InitializeComponent();
         Log.Write("Application resources ready.");
         UnhandledException += (_, arguments) => Log.Write(arguments.Exception.ToString());
@@ -54,7 +55,8 @@ public sealed partial class BridgeApplication : Application
     {
         try
         {
-            if (motionTest)
+#if DEVELOPER_CHECKS
+            if (Environment.GetCommandLineArgs().Contains("--settings-motion-test"))
             {
                 var checks = new SettingsMotionChecks();
                 window = checks;
@@ -62,6 +64,7 @@ public sealed partial class BridgeApplication : Application
                 _ = checks.RunAsync();
                 return;
             }
+#endif
             Log.Write("Creating main window.");
             window = new MainWindow(smokeTest);
             window.Activate();
