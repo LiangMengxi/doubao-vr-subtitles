@@ -72,6 +72,14 @@
 
 Copyright (C) 2026 凉梦曦。本项目原创程序代码、构建脚本及原创文档以 **GNU GPL version 3 only（GPL-3.0-only）** 授权，全文见 [LICENSE](LICENSE)。允许依照该许可证使用、修改和再分发；本程序不提供任何担保。第三方组件保留各自许可证，不因本项目采用 GPL 而被重新授权。
 
-PICO 麦克风改善思路参考 Kill11 的 PicoStreamingMicrophoneKeeper，本项目根据 Windows WASAPI 文档独立实现，未复制参考项目的代码或资源。详细借鉴声明见 [参考说明](docs/REFERENCES.md)。分发安装包或 ZIP 时，应同时提供与该二进制对应的完整源码及构建说明，而非只指向可能已变化的最新主分支。
+### PICO 麦克风延迟改善借鉴声明
+
+- 原作者：[Kill11](https://github.com/Kill11)
+- 参考项目：**PicoStreamingMicrophoneKeeper**
+- 项目仓库：[https://github.com/Kill11/PicoStreamingMicrophoneKeeper](https://github.com/Kill11/PicoStreamingMicrophoneKeeper)
+
+感谢原作者公开处理思路。本项目仅借鉴持续消费 PICO 麦克风音频包的功能思路，根据 Windows WASAPI 文档独立实现，未复制参考项目的代码或资源。详细说明见 [参考说明](docs/REFERENCES.md)。
+
+分发安装包或 ZIP 时，应同时提供与该二进制对应的完整源码及构建说明，而非只指向可能已变化的最新主分支。
 
 公开源码无需私有测试资料即可重建完整程序、ZIP 和安装 EXE，见 [源码重建说明](docs/SOURCE_BUILD.md)。源码重建输出与正式发行目录隔离，不替代维护者的完整发布验收。
