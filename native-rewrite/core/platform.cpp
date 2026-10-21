@@ -6,6 +6,9 @@
 #include "audio_restore.h"
 #include <mmdeviceapi.h>
 #include <propsys.h>
+#include <audioclient.h>
+#include <chrono>
+#include <thread>
 
 namespace {
 struct __declspec(uuid("F8679F50-850A-41CF-9C72-430F290290C8")) AudioPolicy : IUnknown {
@@ -76,6 +79,64 @@ std::wstring validated_audio_id(const AudioDefaults& defaults, std::wstring_view
 }
 
 namespace platform {
+struct MicrophoneCaptureState {
+    winrt::com_ptr<IAudioClient> client;
+    winrt::com_ptr<IAudioCaptureClient> capture;
+    winrt::handle ready{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
+    bool started = false;
+    ~MicrophoneCaptureState() { if (started) client->Stop(); }
+};
+
+MicrophoneCapture::MicrophoneCapture(std::wstring_view identifier) : state(std::make_unique<MicrophoneCaptureState>()) {
+    if (!state->ready) winrt::throw_last_error();
+    AudioDefaults defaults;
+    const auto target = validated_audio_id(defaults, identifier, eCapture);
+    if (target.empty()) throw winrt::hresult_invalid_argument();
+    winrt::com_ptr<IMMDevice> device;
+    winrt::check_hresult(defaults.enumerator->GetDevice(target.c_str(), device.put()));
+    winrt::check_hresult(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, state->client.put_void()));
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nChannels = 1;
+    format.nSamplesPerSec = 48000;
+    format.wBitsPerSample = 16;
+    format.nBlockAlign = 2;
+    format.nAvgBytesPerSec = 96000;
+    constexpr DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    winrt::check_hresult(state->client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 400000, 0, &format, nullptr));
+    winrt::check_hresult(state->client->SetEventHandle(state->ready.get()));
+    winrt::check_hresult(state->client->GetService(__uuidof(IAudioCaptureClient), state->capture.put_void()));
+    winrt::check_hresult(state->client->Start());
+    state->started = true;
+}
+
+MicrophoneCapture::~MicrophoneCapture() = default;
+
+void MicrophoneCapture::wait(uint32_t milliseconds) const {
+    if (WaitForSingleObject(state->ready.get(), milliseconds) == WAIT_FAILED) winrt::throw_last_error();
+}
+
+MicrophoneProgress MicrophoneCapture::consume() {
+    MicrophoneProgress progress;
+    for (uint32_t index = 0; index < 256; ++index) {
+        UINT32 available = 0;
+        winrt::check_hresult(state->capture->GetNextPacketSize(&available));
+        if (available == 0) break;
+        BYTE* packet = nullptr;
+        UINT32 frames = 0;
+        DWORD flags = 0;
+        winrt::check_hresult(state->capture->GetBuffer(&packet, &frames, &flags, nullptr, nullptr));
+        HRESULT released = S_OK;
+        {
+            ScopeExit release([&] { released = state->capture->ReleaseBuffer(frames); });
+            progress.frames += frames;
+            ++progress.packets;
+        }
+        winrt::check_hresult(released);
+    }
+    return progress;
+}
+
 std::vector<AudioDevice> audio_devices(uint32_t flow) {
     if (flow > 1) throw winrt::hresult_invalid_argument();
     ApartmentScope apartment;
@@ -119,6 +180,52 @@ void restore_audio(std::wstring_view playback, std::wstring_view microphone) {
     const auto playback_id = validated_audio_id(defaults, playback, eRender);
     const auto microphone_id = validated_audio_id(defaults, microphone, eCapture);
     restore_audio_devices(playback_id, microphone_id, defaults);
+}
+
+void register_steamvr(std::wstring_view manifest, bool enabled) {
+    constexpr auto key = "org.liangmengxi.doubaovr";
+    const std::wstring file(manifest);
+    const auto attributes = GetFileAttributesW(file.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        throw winrt::hresult_invalid_argument(L"SteamVR 注册文件不存在。");
+    }
+    vr::EVRInitError init_error = vr::VRInitError_None;
+    vr::VR_Init(&init_error, vr::VRApplication_Utility);
+    if (init_error != vr::VRInitError_None) throw winrt::hresult_error(E_FAIL, L"无法连接 SteamVR，请确认 SteamVR 已安装。" + winrt::to_hstring(vr::VR_GetVRInitErrorAsEnglishDescription(init_error)));
+    ScopeExit runtime([] { vr::VR_Shutdown(); });
+    if (!vr::VRApplications()) throw winrt::hresult_error(E_NOINTERFACE, L"SteamVR 应用注册接口不可用。");
+    auto& applications = *vr::VRApplications();
+    const auto path = winrt::to_string(file);
+    const bool installed = applications.IsApplicationInstalled(key);
+    const bool previous = installed && applications.GetApplicationAutoLaunch(key);
+    auto check = [&](vr::EVRApplicationError result) {
+        if (result != vr::VRApplicationError_None) throw winrt::hresult_error(E_FAIL, L"SteamVR 注册失败：" + winrt::to_hstring(applications.GetApplicationsErrorNameFromEnum(result)));
+    };
+    try {
+        if (enabled) {
+            check(applications.AddApplicationManifest(path.c_str(), false));
+            for (uint32_t attempt = 0; attempt < 20 && !applications.IsApplicationInstalled(key); ++attempt) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (!applications.IsApplicationInstalled(key)) throw winrt::hresult_error(E_FAIL, L"SteamVR 尚未读取注册文件，请重启 SteamVR 后重试。");
+            check(applications.SetApplicationAutoLaunch(key, true));
+            if (!applications.GetApplicationAutoLaunch(key)) throw winrt::hresult_error(E_FAIL, L"SteamVR 未保存自启动设置。");
+        } else if (installed) {
+            check(applications.SetApplicationAutoLaunch(key, false));
+            if (applications.GetApplicationAutoLaunch(key)) throw winrt::hresult_error(E_FAIL, L"SteamVR 未关闭自启动。");
+            check(applications.RemoveApplicationManifest(path.c_str()));
+            if (applications.IsApplicationInstalled(key)) throw winrt::hresult_error(E_FAIL, L"SteamVR 未移除应用注册。");
+        }
+    } catch (...) {
+        bool restored = true;
+        if (installed) {
+            if (!applications.IsApplicationInstalled(key) && applications.AddApplicationManifest(path.c_str(), false) != vr::VRApplicationError_None) restored = false;
+            if (applications.SetApplicationAutoLaunch(key, previous) != vr::VRApplicationError_None || applications.GetApplicationAutoLaunch(key) != previous) restored = false;
+        } else if (applications.IsApplicationInstalled(key)) {
+            applications.SetApplicationAutoLaunch(key, false);
+            if (applications.RemoveApplicationManifest(path.c_str()) != vr::VRApplicationError_None || applications.IsApplicationInstalled(key)) restored = false;
+        }
+        if (!restored) throw winrt::hresult_error(E_FAIL, L"SteamVR 注册失败，原状态未能完整恢复，请在 SteamVR 设置中检查启动项。");
+        throw;
+    }
 }
 
 uint32_t submit_overlay(uint64_t handle, const winrt::com_ptr<ID3D11Texture2D>& texture,

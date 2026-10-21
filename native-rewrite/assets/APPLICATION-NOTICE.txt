@@ -1,0 +1,9 @@
+豆包VR字幕
+Copyright (C) 2026 凉梦曦
+
+本项目原创代码依据 GNU General Public License version 3 only（GPL-3.0-only）授权。
+允许依照该许可证使用、修改和再分发；本程序不提供任何担保，包括适销性或特定用途适用性的默示担保。
+许可证全文见同目录 GPL-3.0.txt。第三方组件保留各自版权与许可证，见 THIRD-PARTY-NOTICES.txt。
+
+项目及源码：https://github.com/LiangMengxi/doubao-vr-subtitles
+分发二进制时，必须同时提供与该二进制版本对应的完整源码及构建说明，不能仅指向不匹配的最新源码。

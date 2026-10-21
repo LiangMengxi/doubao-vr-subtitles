@@ -69,9 +69,29 @@ struct BridgeAudioTarget {
     std::array<wchar_t, 512> microphone{};
 };
 
+struct BridgeMicrophoneStats {
+    uint32_t size = sizeof(BridgeMicrophoneStats);
+    uint32_t enabled = 0;
+    uint32_t state = 0;
+    uint32_t reserved = 0;
+    uint64_t frames = 0;
+    uint64_t packets = 0;
+    std::array<wchar_t, 256> device{};
+    std::array<wchar_t, 512> error{};
+};
+
+struct BridgeSteamVrRegistration {
+    uint32_t size = sizeof(BridgeSteamVrRegistration);
+    uint32_t enabled = 0;
+    std::array<wchar_t, 4096> manifest{};
+};
+
 extern "C" {
 BRIDGE_API int32_t __cdecl bridge_audio_devices(uint32_t flow, BridgeAudioDevices& devices, BridgeError& error) noexcept;
 BRIDGE_API int32_t __cdecl bridge_audio_restore(const BridgeAudioTarget& target, BridgeError& error) noexcept;
+BRIDGE_API int32_t __cdecl bridge_microphone_configure(BridgeId bridge, uint32_t enabled) noexcept;
+BRIDGE_API int32_t __cdecl bridge_microphone_stats(BridgeId bridge, BridgeMicrophoneStats& stats) noexcept;
+BRIDGE_API int32_t __cdecl bridge_steamvr_register(const BridgeSteamVrRegistration& request, BridgeError& error) noexcept;
 BRIDGE_API uint32_t __cdecl bridge_version() noexcept;
 BRIDGE_API BridgeId __cdecl bridge_create() noexcept;
 BRIDGE_API void __cdecl bridge_destroy(BridgeId bridge) noexcept;

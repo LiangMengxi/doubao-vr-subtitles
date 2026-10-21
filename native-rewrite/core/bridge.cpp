@@ -2,6 +2,7 @@
 #include "graphics.h"
 #include "platform.h"
 #include "overlay_transform.h"
+#include "microphone_keeper.h"
 #include <windows.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -163,7 +164,21 @@ public:
     void dispose() {
         std::lock_guard control_guard(control);
         disposed = true;
+        microphone.enable(false);
         stop_worker();
+    }
+    int configure_microphone(uint32_t enabled) {
+        std::lock_guard control_guard(control);
+        if (disposed) return E_HANDLE;
+        if (enabled > 1) return E_INVALIDARG;
+        microphone.enable(enabled != 0);
+        return S_OK;
+    }
+    int microphone_stats(BridgeMicrophoneStats& output) {
+        std::lock_guard control_guard(control);
+        if (disposed) return E_HANDLE;
+        output = microphone.snapshot();
+        return S_OK;
     }
     int configure(const BridgeOptions& requested) {
         std::lock_guard control_guard(control);
@@ -371,6 +386,7 @@ private:
         }
     }
     std::shared_ptr<Signal> signal;
+    MicrophoneKeeper microphone;
     std::jthread worker;
     std::mutex control;
     bool disposed = false;
@@ -411,7 +427,7 @@ Registry& registry() {
 }
 }
 
-uint32_t __cdecl bridge_version() noexcept { return 5; }
+uint32_t __cdecl bridge_version() noexcept { return 6; }
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }
@@ -428,6 +444,19 @@ int32_t __cdecl bridge_configure(BridgeId bridge, const BridgeOptions& options) 
     try {
         auto instance = registry().acquire(bridge);
         return instance ? instance->configure(options) : E_HANDLE;
+    } catch (...) { return E_FAIL; }
+}
+int32_t __cdecl bridge_microphone_configure(BridgeId bridge, uint32_t enabled) noexcept {
+    try {
+        auto instance = registry().acquire(bridge);
+        return instance ? instance->configure_microphone(enabled) : E_HANDLE;
+    } catch (...) { return E_FAIL; }
+}
+int32_t __cdecl bridge_microphone_stats(BridgeId bridge, BridgeMicrophoneStats& output) noexcept {
+    try {
+        if (output.size != sizeof(BridgeMicrophoneStats)) return E_INVALIDARG;
+        auto instance = registry().acquire(bridge);
+        return instance ? instance->microphone_stats(output) : E_HANDLE;
     } catch (...) { return E_FAIL; }
 }
 void __cdecl bridge_stop(BridgeId bridge) noexcept {

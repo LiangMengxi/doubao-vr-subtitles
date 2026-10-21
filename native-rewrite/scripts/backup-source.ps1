@@ -8,7 +8,7 @@ if (Test-Path -LiteralPath (Join-Path $rewriteRoot 'tests')) { $sourceRoots += J
 $files = Get-ChildItem -LiteralPath $sourceRoots -Recurse -File | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
 if (Test-Path -LiteralPath (Join-Path $rewriteRoot 'installer')) { $files += Get-ChildItem -LiteralPath (Join-Path $rewriteRoot 'installer') -Recurse -File }
 $files += Get-ChildItem -LiteralPath $rewriteRoot -File
-$rootFiles = @('.gitattributes','.gitignore','README.md','docs\RELEASE_NOTES.md','docs\RELEASING.md','THIRD_PARTY_NOTICES.md','docs\USAGE.md','VERSION','scripts\build.ps1','scripts\package-release.ps1','scripts\start.cmd','licenses\README.md','licenses\InnoSetup-LICENSE.txt','licenses\OpenVR-LICENSE.txt')
+$rootFiles = @('.gitattributes','.gitignore','LICENSE','README.md','docs\RELEASE_NOTES.md','docs\RELEASING.md','docs\REFERENCES.md','docs\SOURCE_BUILD.md','THIRD_PARTY_NOTICES.md','docs\USAGE.md','VERSION','scripts\build.ps1','scripts\package-release.ps1','scripts\start.cmd','licenses\README.md','licenses\InnoSetup-LICENSE.txt','licenses\OpenVR-LICENSE.txt')
 $files += $rootFiles | ForEach-Object { Get-Item -LiteralPath (Join-Path $repositoryRoot $_) }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open((Join-Path $backupRoot 'source.zip'), [IO.Compression.ZipArchiveMode]::Create)

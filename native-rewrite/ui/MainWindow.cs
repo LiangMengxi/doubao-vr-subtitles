@@ -37,6 +37,7 @@ internal sealed partial class MainWindow : Window
     private WriteableBitmap? bitmap;
     private DateTime nextDiscovery = DateTime.MinValue;
     private readonly bool smokeTest;
+    private readonly TitleBarAppearance titleBar;
     private readonly DateTime opened = DateTime.UtcNow;
 
     public MainWindow(bool smokeTest)
@@ -59,7 +60,7 @@ internal sealed partial class MainWindow : Window
         surface.Children.Add(background);
         surface.Children.Add(root);
         Content = surface;
-        root.ActualThemeChanged += (_, _) => NativeBridge.TitleBarTheme(WinRT.Interop.WindowNative.GetWindowHandle(this), root.ActualTheme == ElementTheme.Dark);
+        titleBar = new TitleBarAppearance(this, root);
         ApplyTheme();
         AppWindow.Changed += (_, arguments) =>
         {
@@ -82,7 +83,7 @@ internal sealed partial class MainWindow : Window
         timer.Start();
         try
         {
-            if (NativeBridge.Version() != 5) throw new InvalidOperationException("原生核心接口版本不匹配。");
+            if (NativeBridge.Version() != 6) throw new InvalidOperationException("原生核心接口版本不匹配。");
             bridge = new BridgeHandle();
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
         }
@@ -91,6 +92,7 @@ internal sealed partial class MainWindow : Window
         RefreshSources();
         ApplyBackground();
         _ = RefreshAudioAsync();
+        _ = InitializeMicrophoneAsync();
     }
 
     private static TextBlock Heading(string text, double size = 18) => new() { Text = text, FontSize = size, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
@@ -185,6 +187,7 @@ internal sealed partial class MainWindow : Window
         var closeDoubao = new ToggleSwitch { Header = "退出时同时关闭豆包", IsOn = settings.ExitCloseDoubao };
         closeDoubao.Toggled += (_, _) => { settings.ExitCloseDoubao = closeDoubao.IsOn; ApplyConfiguration(); };
         behavior.Children.Add(closeDoubao);
+        behavior.Children.Add(SteamVrStartupSettings());
         var imageSettings = Column();
         imageSettings.Children.Add(Slider("顶部裁剪", 0, 120, 1, settings.CropTop, value => settings.CropTop = (float)value, value => $"{value:F0} 像素",
             ("完整", 0), ("隐藏工具栏", 44)));
@@ -316,6 +319,7 @@ internal sealed partial class MainWindow : Window
     {
         var theme = settings.Appearance == "light" ? ElementTheme.Light : settings.Appearance == "dark" ? ElementTheme.Dark : ElementTheme.Default;
         surface.RequestedTheme = root.RequestedTheme = theme;
+        titleBar?.Apply();
     }
     private void ApplyConfiguration() { if (!shuttingDown && saveTimer != null) { saveTimer.Stop(); saveTimer.Start(); } }
 
@@ -451,6 +455,7 @@ internal sealed partial class MainWindow : Window
         shuttingDown = true;
         activeDialog?.Hide();
         accent.Dispose();
+        titleBar.Dispose();
         background.ImageFailed -= BackgroundFailed;
         background.Source = null;
         Log.Write("Shutdown requested; releasing native core.");

@@ -69,10 +69,14 @@ internal static class NativeBridge
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, in int value, uint size);
 
-    public static void TitleBarTheme(nint hwnd, bool dark)
+    public static void TitleBarTheme(nint hwnd, bool dark, Windows.UI.Color background, Windows.UI.Color foreground)
     {
         int enabled = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, 20, enabled, sizeof(int));
+        int caption = background.R | background.G << 8 | background.B << 16;
+        int text = foreground.R | foreground.G << 8 | foreground.B << 16;
+        DwmSetWindowAttribute(hwnd, 35, caption, sizeof(int));
+        DwmSetWindowAttribute(hwnd, 36, text, sizeof(int));
     }
 
     [DllImport(Library, EntryPoint = "bridge_version", CallingConvention = CallingConvention.Cdecl)]

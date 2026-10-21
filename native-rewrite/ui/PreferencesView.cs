@@ -56,6 +56,7 @@ internal sealed partial class MainWindow
         };
         refreshAudio.Click += async (_, _) => await RefreshAudioAsync(true);
         panel.Children.Add(refreshAudio);
+        panel.Children.Add(PicoMicrophoneSettings());
         return panel;
     }
 

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace platform {
 struct AudioDevice {
@@ -16,6 +17,25 @@ struct AudioDevice {
 };
 std::vector<AudioDevice> audio_devices(uint32_t flow);
 void restore_audio(std::wstring_view playback, std::wstring_view microphone);
+void register_steamvr(std::wstring_view manifest, bool enabled);
+
+struct MicrophoneProgress {
+    uint64_t frames = 0;
+    uint64_t packets = 0;
+};
+
+struct MicrophoneCaptureState;
+class MicrophoneCapture {
+public:
+    explicit MicrophoneCapture(std::wstring_view identifier);
+    ~MicrophoneCapture();
+    MicrophoneCapture(const MicrophoneCapture&) = delete;
+    MicrophoneCapture& operator=(const MicrophoneCapture&) = delete;
+    MicrophoneProgress consume();
+    void wait(uint32_t milliseconds) const;
+private:
+    std::unique_ptr<MicrophoneCaptureState> state;
+};
 
 class ApartmentScope {
 public:

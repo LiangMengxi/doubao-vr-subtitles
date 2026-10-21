@@ -29,6 +29,8 @@ internal sealed class Settings
     [JsonPropertyName("audio_target_name")] public string AudioTargetName { get; set; } = "";
     [JsonPropertyName("microphone_target_id")] public string MicrophoneTargetId { get; set; } = "";
     [JsonPropertyName("microphone_target_name")] public string MicrophoneTargetName { get; set; } = "";
+    [JsonPropertyName("pico_microphone_keeper")] public bool PicoMicrophoneKeeper { get; set; }
+    [JsonPropertyName("steamvr_auto_start")] public bool SteamVrAutoStart { get; set; }
 
     public static Settings Load()
     {

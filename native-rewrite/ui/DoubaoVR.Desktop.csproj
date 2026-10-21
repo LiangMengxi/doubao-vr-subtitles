@@ -21,10 +21,15 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\tests\SettingsMotionChecks.cs" Link="SettingsMotionChecks.cs" Condition="'$(EnableDeveloperChecks)' == 'true'" />
+    <Compile Include="..\tests\CaptionChecks.cs" Link="CaptionChecks.cs" Condition="'$(EnableDeveloperChecks)' == 'true'" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="[1.7.250606001]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.7705]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="[1.7.251221100]" />
     <Content Include="..\assets\bridge.ico" Link="bridge.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\LICENSE" Link="licenses\GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\assets\APPLICATION-NOTICE.txt" Link="licenses\APPLICATION-NOTICE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\THIRD_PARTY_NOTICES.md" Link="licenses\THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\REFERENCES.md" Link="licenses\REFERENCES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\out\core\Release\DoubaoVR.Core.dll" Link="DoubaoVR.Core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\DoubaoVR.Core.dll')" />
     <Content Include="..\out\core\Release\openvr_api.dll" Link="openvr_api.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\openvr_api.dll')" />
     <Content Include="..\out\core\Release\OpenVR-LICENSE.txt" Link="OpenVR-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\out\core\Release\OpenVR-LICENSE.txt')" />

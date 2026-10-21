@@ -54,3 +54,12 @@ int32_t __cdecl bridge_audio_restore(const BridgeAudioTarget& target, BridgeErro
         platform::restore_audio(std::wstring(target.playback.begin(), playback_end), std::wstring(target.microphone.begin(), microphone_end));
     });
 }
+
+int32_t __cdecl bridge_steamvr_register(const BridgeSteamVrRegistration& request, BridgeError& error) noexcept {
+    return audio_call(error, [&] {
+        if (request.size != sizeof(BridgeSteamVrRegistration) || request.enabled > 1) throw winrt::hresult_invalid_argument();
+        const auto end = std::find(request.manifest.begin(), request.manifest.end(), L'\0');
+        if (end == request.manifest.begin() || end == request.manifest.end()) throw winrt::hresult_invalid_argument();
+        platform::register_steamvr(std::wstring(request.manifest.begin(), end), request.enabled != 0);
+    });
+}

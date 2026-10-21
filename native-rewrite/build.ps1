@@ -1,9 +1,10 @@
-param([switch]$PrepareToolchain, [switch]$UiOnly, [switch]$Publish)
+param([switch]$PrepareToolchain, [switch]$UiOnly, [switch]$Publish, [switch]$SourceBuild)
 $ErrorActionPreference = 'Stop'
 if ($UiOnly -and $Publish) { throw 'Publishing requires a complete native build and all automated checks.' }
+if ($SourceBuild -and ($UiOnly -or $Publish)) { throw 'SourceBuild is separate from UiOnly and verified publishing.' }
 $rewriteRoot = $PSScriptRoot
 $validationScript = Join-Path $rewriteRoot 'tests\RunChecks.ps1'
-$runChecks = -not $UiOnly -and (Test-Path -LiteralPath $validationScript)
+$runChecks = -not $UiOnly -and -not $SourceBuild -and (Test-Path -LiteralPath $validationScript)
 if ($Publish -and -not $runChecks) { throw 'Publishing requires the complete local validation suite; public source builds do not include developer tests.' }
 $testConfiguration = if ($runChecks) { 'ON' } else { 'OFF' }
 Push-Location -LiteralPath $rewriteRoot
@@ -45,12 +46,13 @@ try {
     dotnet build ui/DoubaoVR.Desktop.csproj -c Release --no-restore "-p:EnableDeveloperChecks=$($runChecks.ToString().ToLowerInvariant())"
     if ($LASTEXITCODE -ne 0) { throw 'WinUI build failed.' }
     if ($runChecks) { & $validationScript }
-    if ($Publish) {
+    if ($Publish -or $SourceBuild) {
         & (Join-Path $rewriteRoot 'scripts\backup-source.ps1')
         $publishStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
         $stagingRoot = [IO.Path]::GetFullPath((Join-Path $rewriteRoot ('out\publish-' + $publishStamp)))
-        $applicationRoot = [IO.Path]::GetFullPath((Join-Path $rewriteRoot 'out\app'))
-        $previousRoot = [IO.Path]::GetFullPath((Join-Path $rewriteRoot ('out\app-backups\' + $publishStamp)))
+        $applicationName = if ($SourceBuild) { 'source-app' } else { 'app' }
+        $applicationRoot = [IO.Path]::GetFullPath((Join-Path $rewriteRoot ('out\' + $applicationName)))
+        $previousRoot = [IO.Path]::GetFullPath((Join-Path $rewriteRoot ('out\' + $applicationName + '-backups\' + $publishStamp)))
         foreach ($targetPath in @($stagingRoot, $applicationRoot, $previousRoot)) {
             if (-not $targetPath.StartsWith($rewriteRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Publish path escaped the rewrite workspace.' }
         }
@@ -64,9 +66,11 @@ try {
         if ((Get-FileHash -LiteralPath $publishedCore).Hash -ne (Get-FileHash -LiteralPath 'out/core/Release/DoubaoVR.Core.dll').Hash) { throw 'Published native core does not match the tested build.' }
         Copy-Item -LiteralPath 'README.md' -Destination (Join-Path $stagingRoot 'README-NATIVE.md')
         Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination (Join-Path $stagingRoot 'THIRD_PARTY_NOTICES-NATIVE.md')
+        if ($SourceBuild) { 'Rebuilt from public source. This build is not an officially verified release.' | Set-Content -LiteralPath (Join-Path $stagingRoot 'BUILD-INFO.txt') -Encoding utf8 }
         $nugetCache = Join-Path $env:USERPROFILE '.nuget\packages'
         $licenseRoot = Join-Path $stagingRoot 'licenses'
         New-Item -ItemType Directory -Path $licenseRoot -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Split-Path $rewriteRoot -Parent) 'docs\REFERENCES.md') -Destination (Join-Path $licenseRoot 'REFERENCES.txt')
         Copy-Item -LiteralPath (Join-Path $nugetCache 'microsoft.windowsappsdk\1.7.250606001\license.txt') -Destination (Join-Path $licenseRoot 'WindowsAppSDK-LICENSE.txt')
         Copy-Item -LiteralPath (Join-Path $nugetCache 'microsoft.windowsappsdk\1.7.250606001\NOTICE.txt') -Destination (Join-Path $licenseRoot 'WindowsAppSDK-NOTICE.txt')
         $runtimeRoot = (Get-ChildItem -LiteralPath (Join-Path $nugetCache 'microsoft.netcore.app.runtime.win-x64') -Directory | Where-Object Name -eq '8.0.30' | Select-Object -First 1).FullName
@@ -85,7 +89,7 @@ try {
             if ((Test-Path -LiteralPath $previousRoot) -and -not (Test-Path -LiteralPath $applicationRoot)) { Move-Item -LiteralPath $previousRoot -Destination $applicationRoot }
             throw
         }
-        Write-Host "Published application: $rewriteRoot\out\app\DoubaoVR.exe"
+        Write-Host "Application directory: $applicationRoot"
     }
 } finally {
     $env:PATH = $savedPath
