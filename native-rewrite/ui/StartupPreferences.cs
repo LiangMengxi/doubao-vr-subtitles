@@ -6,7 +6,7 @@ namespace DoubaoVR.Desktop;
 internal sealed partial class MainWindow
 {
     private readonly ToggleSwitch picoKeeper = new() { Header = "改善PICO麦克风延迟" };
-    private readonly ToggleSwitch steamVrStartup = new() { Header = "随SteamVR启动", OnContent = "已注册", OffContent = "未注册" };
+    private readonly ToggleSwitch steamVrStartup = new() { Header = "随SteamVR启动", OnContent = "开", OffContent = "关" };
     private bool changingPico;
     private bool changingStartup;
 
@@ -48,12 +48,14 @@ internal sealed partial class MainWindow
         try
         {
             if (shuttingDown) return;
+            await using var storage = await settingsStore.AcquireAsync();
+            if (shuttingDown) return;
             var native = bridge ?? throw new InvalidOperationException("原生核心尚未就绪。");
             await Task.Run(() => PicoMicrophoneService.Configure(native, enabled));
             if (previous != enabled)
             {
                 settings.PicoMicrophoneKeeper = enabled;
-                try { settings.Save(); }
+                try { await storage.SaveAsync(settings.Snapshot()); }
                 catch
                 {
                     await Task.Run(() => PicoMicrophoneService.Configure(native, previous));
@@ -80,25 +82,16 @@ internal sealed partial class MainWindow
         steamVrStartup.IsEnabled = false;
         steamVrStartup.OnContent = "正在注册…";
         steamVrStartup.OffContent = "正在取消…";
-        bool previous = settings.SteamVrAutoStart;
         Exception? failure = null;
         await operations.WaitAsync();
         try
         {
             if (shuttingDown) return;
-            await SteamVrStartupService.ChangeAsync(enabled, lifetime.Token);
-            settings.SteamVrAutoStart = enabled;
-            try { settings.Save(); }
-            catch (Exception saveError)
-            {
-                try { await SteamVrStartupService.ChangeAsync(previous, CancellationToken.None); }
-                catch (Exception rollbackError)
-                {
-                    throw new AggregateException("无法保存设置，且未能恢复原启动项，请在 SteamVR 设置中检查。", saveError, rollbackError);
-                }
-                settings.SteamVrAutoStart = previous;
-                throw;
-            }
+            await using var storage = await settingsStore.AcquireAsync();
+            if (shuttingDown) return;
+            await SteamVrStartupService.ChangeAsync(enabled,
+                value => { settings.SteamVrAutoStart = value; return storage.SaveAsync(settings.Snapshot()); },
+                value => settings.SteamVrAutoStart = value, lifetime.Token);
         }
         catch (OperationCanceledException) when (shuttingDown) { }
         catch (Exception exception) { failure = exception; Log.Write(exception.ToString()); }
@@ -106,8 +99,8 @@ internal sealed partial class MainWindow
         {
             operations.Release();
             steamVrStartup.IsOn = settings.SteamVrAutoStart;
-            steamVrStartup.OnContent = "已注册";
-            steamVrStartup.OffContent = "未注册";
+            steamVrStartup.OnContent = "开";
+            steamVrStartup.OffContent = "关";
             steamVrStartup.IsEnabled = !shuttingDown;
             changingStartup = false;
         }

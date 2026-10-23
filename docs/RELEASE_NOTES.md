@@ -1,3 +1,7 @@
+# v0.3.2
+
+做了一些性能优化。
+
 # v0.3.1
 
 1. 新增 PICO 麦克风延迟改善开关，整合至音频设备设置；思路参考 [PicoStreamingMicrophoneKeeper](https://github.com/Kill11/PicoStreamingMicrophoneKeeper)，独立实现并附借鉴声明。

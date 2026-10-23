@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 
 namespace DoubaoVR.Desktop;
 
+internal sealed record SettingsSnapshot(string Json, string BackgroundImage);
+
 internal sealed class Settings
 {
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DoubaoVR.Native");
@@ -76,15 +78,11 @@ internal sealed class Settings
     private static float Limit(float value, float minimum, float maximum, float fallback) =>
         float.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
 
-    public void Save()
+    public SettingsSnapshot Snapshot()
     {
-        Normalize();
-        Directory.CreateDirectory(DataDirectory);
-        var temporary = FilePath + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        if (File.Exists(FilePath)) File.Copy(FilePath, FilePath + ".bak", true);
-        File.Move(temporary, FilePath, true);
-        BackgroundFiles.Cleanup(DataDirectory, BackgroundImage);
+        var copy = (Settings)MemberwiseClone();
+        copy.Normalize();
+        return new(JsonSerializer.Serialize(copy, new JsonSerializerOptions { WriteIndented = true }), copy.BackgroundImage);
     }
 
     public BridgeOptions Options(bool vr, bool preview) => new()

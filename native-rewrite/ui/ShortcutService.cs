@@ -90,7 +90,7 @@ internal static class ShortcutService
 
     public static async Task<CaptionWindow> OpenAsync(CancellationToken cancellation)
     {
-        var existing = WindowSource.Discover().FirstOrDefault(window => window.Score >= 150);
+        var existing = CaptionController.Find(WindowSource.Discover());
         if (existing != null) return existing;
         var keys = Read();
         if (RunningExecutable() == null)
@@ -109,7 +109,7 @@ internal static class ShortcutService
         while (DateTime.UtcNow < deadline)
         {
             cancellation.ThrowIfCancellationRequested();
-            var caption = WindowSource.Discover().FirstOrDefault(window => window.Score >= 150);
+            var caption = CaptionController.Find(WindowSource.Discover());
             if (caption != null) return caption;
             if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
             {

@@ -57,9 +57,23 @@ int32_t __cdecl bridge_audio_restore(const BridgeAudioTarget& target, BridgeErro
 
 int32_t __cdecl bridge_steamvr_register(const BridgeSteamVrRegistration& request, BridgeError& error) noexcept {
     return audio_call(error, [&] {
-        if (request.size != sizeof(BridgeSteamVrRegistration) || request.enabled > 1) throw winrt::hresult_invalid_argument();
+        if (request.size != sizeof(BridgeSteamVrRegistration) || request.enabled > 1 || request.auto_launch > request.enabled || request.reserved) throw winrt::hresult_invalid_argument();
         const auto end = std::find(request.manifest.begin(), request.manifest.end(), L'\0');
         if (end == request.manifest.begin() || end == request.manifest.end()) throw winrt::hresult_invalid_argument();
-        platform::register_steamvr(std::wstring(request.manifest.begin(), end), request.enabled != 0);
+        platform::register_steamvr(std::wstring(request.manifest.begin(), end), request.enabled != 0, request.auto_launch != 0);
+    });
+}
+
+int32_t __cdecl bridge_steamvr_state(BridgeSteamVrState& output, BridgeError& error) noexcept {
+    return audio_call(error, [&] {
+        if (output.size != sizeof(BridgeSteamVrState)) throw winrt::hresult_invalid_argument();
+        const auto state = platform::steamvr_state();
+        if (state.executable.size() >= output.executable.size() || state.arguments.size() >= output.arguments.size()) throw winrt::hresult_error(E_BOUNDS);
+        output = {};
+        output.installed = state.installed;
+        output.auto_launch = state.auto_launch;
+        output.dashboard = state.dashboard;
+        std::copy(state.executable.begin(), state.executable.end(), output.executable.begin());
+        std::copy(state.arguments.begin(), state.arguments.end(), output.arguments.begin());
     });
 }

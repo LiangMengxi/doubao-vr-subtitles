@@ -22,6 +22,8 @@ internal sealed partial class MainWindow
     private ContentDialog? activeDialog;
     private bool refreshingAudio;
     private bool restoringAudio;
+    private long backgroundRevision;
+    private Task backgroundImport = Task.CompletedTask;
 
     private SettingsExpander SettingsSection(string title, UIElement content)
     {
@@ -177,10 +179,11 @@ internal sealed partial class MainWindow
             choose.IsEnabled = false;
             try { await ChooseBackgroundAsync(); }
             catch (Exception exception) { Log.Write(exception.ToString()); if (!shuttingDown) await ShowErrorAsync("无法设置背景", exception.Message); }
-            finally { choose.IsEnabled = !shuttingDown; }
+            finally { if (!shuttingDown) choose.IsEnabled = true; }
         };
         removeBackground.Click += (_, _) =>
         {
+            ++backgroundRevision;
             settings.BackgroundImage = "";
             ApplyBackground();
             ApplyConfiguration();
@@ -203,19 +206,28 @@ internal sealed partial class MainWindow
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
         var file = await picker.PickSingleFileAsync();
         if (file == null || shuttingDown) return;
-        await operations.WaitAsync();
+        backgroundImport = ImportBackgroundAsync(file.Path, ++backgroundRevision);
+        await backgroundImport;
+    }
+
+    private async Task ImportBackgroundAsync(string path, long revision)
+    {
+        await using var storage = await settingsStore.AcquireAsync(lifetime.Token);
+        if (shuttingDown || revision != backgroundRevision) return;
+        string image = await storage.ImportAsync(path, settings.BackgroundImage);
+        if (shuttingDown || revision != backgroundRevision) return;
         string previous = settings.BackgroundImage;
+        settings.BackgroundImage = image;
         try
         {
-            if (shuttingDown) return;
-            string image = await Task.Run(() => BackgroundImageService.ImportAsync(file.Path, Settings.DataDirectory));
-            if (shuttingDown) { BackgroundFiles.Cleanup(Settings.DataDirectory, previous); return; }
-            settings.BackgroundImage = image;
-            try { settings.Save(); }
-            catch { settings.BackgroundImage = previous; BackgroundFiles.Cleanup(Settings.DataDirectory, previous); throw; }
-            ApplyBackground();
+            await storage.SaveAsync(settings.Snapshot());
         }
-        finally { operations.Release(); }
+        catch
+        {
+            if (revision == backgroundRevision) settings.BackgroundImage = previous;
+            throw;
+        }
+        if (!shuttingDown && revision == backgroundRevision) ApplyBackground();
     }
 
     private void ApplyBackground()

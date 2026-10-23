@@ -1,4 +1,5 @@
 #include "graphics.h"
+#include "texture_pool_budget.h"
 #include "platform.h"
 #include <dxgi1_2.h>
 #include <d3dcompiler.h>
@@ -6,6 +7,7 @@
 #include <cstring>
 #include <thread>
 #include <stdexcept>
+#include <utility>
 
 using winrt::check_hresult;
 using winrt::com_ptr;
@@ -44,16 +46,17 @@ void bounds_main(uint3 position : SV_DispatchThreadID) {
 
 }
 
-Graphics::Graphics(int adapter_index) {
+Graphics::Graphics(int adapter_index, std::function<void()> release_consumer_output)
+    : release_consumer(std::move(release_consumer_output)) {
     com_ptr<IDXGIFactory1> factory;
-    check_hresult(CreateDXGIFactory1(__uuidof(IDXGIFactory1), factory.put_void()));
+    platform::check_result(CreateDXGIFactory1(__uuidof(IDXGIFactory1), factory.put_void()), L"创建 DXGI 工厂");
     com_ptr<IDXGIAdapter1> adapter;
-    check_hresult(factory->EnumAdapters1(static_cast<UINT>(std::max(0, adapter_index)), adapter.put()));
+    platform::check_result(factory->EnumAdapters1(static_cast<UINT>(std::max(0, adapter_index)), adapter.put()), L"选择图形适配器");
     D3D_FEATURE_LEVEL level;
     const D3D_FEATURE_LEVEL requested[] = {D3D_FEATURE_LEVEL_11_0};
-    check_hresult(D3D11CreateDevice(adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+    platform::check_result(D3D11CreateDevice(adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, requested, 1, D3D11_SDK_VERSION,
-        device.put(), &level, context.put()));
+        device.put(), &level, context.put()), L"创建 Direct3D 11 设备");
     auto vertex = platform::compile_shader(shader, "vertex_main", "vs_5_0");
     auto pixel = platform::compile_shader(shader, "pixel_main", "ps_5_0");
     auto compute = platform::compile_shader(shader, "bounds_main", "cs_5_0");
@@ -108,15 +111,47 @@ com_ptr<ID3D11Texture2D> Graphics::texture(uint32_t width, uint32_t height, bool
     return result;
 }
 
-Graphics::Constants Graphics::bounds(const com_ptr<ID3D11Texture2D>& source, uint32_t width, uint32_t height, bool trim) {
+Graphics::Target Graphics::target(uint32_t width, uint32_t height) {
+    Target result;
+    result.texture = texture(width, height, false);
+    check_hresult(device->CreateRenderTargetView(result.texture.get(), nullptr, result.render_view.put()));
+    return result;
+}
+
+void Graphics::reset_source() {
+    sampled_view = nullptr;
+    sampled_source = nullptr;
+}
+
+com_ptr<ID3D11ShaderResourceView> Graphics::source_view(const com_ptr<ID3D11Texture2D>& source) {
+    if (sampled_source != source) {
+        com_ptr<ID3D11ShaderResourceView> fresh;
+        check_hresult(device->CreateShaderResourceView(source.get(), nullptr, fresh.put()));
+        sampled_view = std::move(fresh);
+        sampled_source = source;
+    }
+    return sampled_view;
+}
+
+com_ptr<ID3D11ShaderResourceView> Graphics::preview_view(const com_ptr<ID3D11Texture2D>& source) {
+    for (auto& entry : textures) {
+        if (entry.texture != source) continue;
+        if (!entry.sample_view) check_hresult(device->CreateShaderResourceView(source.get(), nullptr, entry.sample_view.put()));
+        return entry.sample_view;
+    }
+    if (sampled_source == source) return sampled_view;
+    com_ptr<ID3D11ShaderResourceView> result;
+    check_hresult(device->CreateShaderResourceView(source.get(), nullptr, result.put()));
+    return result;
+}
+
+Graphics::Constants Graphics::bounds(const com_ptr<ID3D11ShaderResourceView>& input, uint32_t width, uint32_t height, bool trim) {
     Constants result{0, 0, static_cast<float>(width), static_cast<float>(height)};
     if (!trim) return result;
     const uint32_t initial[] = {width, height, 0, 0};
     context->UpdateSubresource(bounds_buffer.get(), 0, nullptr, initial, 0, 0);
     Constants limit{static_cast<float>(width), static_cast<float>(height), 0, 0};
     context->UpdateSubresource(constants.get(), 0, nullptr, &limit, 0, 0);
-    com_ptr<ID3D11ShaderResourceView> input;
-    check_hresult(device->CreateShaderResourceView(source.get(), nullptr, input.put()));
     context->CSSetShader(bounds_shader.get(), nullptr, 0);
     platform::bind_compute(context, input, bounds_view, constants);
     context->Dispatch((width + 15) / 16, (height + 15) / 16, 1);
@@ -132,23 +167,20 @@ Graphics::Constants Graphics::bounds(const com_ptr<ID3D11Texture2D>& source, uin
     return result;
 }
 
-void Graphics::draw(const com_ptr<ID3D11Texture2D>& source, const com_ptr<ID3D11Texture2D>& destination, Constants region) {
+void Graphics::draw(const com_ptr<ID3D11Texture2D>& source, const com_ptr<ID3D11ShaderResourceView>& input,
+    const Target& destination, Constants region) {
     D3D11_TEXTURE2D_DESC input_desc{}, output_desc{};
     source->GetDesc(&input_desc);
-    destination->GetDesc(&output_desc);
+    destination.texture->GetDesc(&output_desc);
     region.left /= input_desc.Width;
     region.top /= input_desc.Height;
     region.width /= input_desc.Width;
     region.height /= input_desc.Height;
     context->UpdateSubresource(constants.get(), 0, nullptr, &region, 0, 0);
-    com_ptr<ID3D11ShaderResourceView> input;
-    com_ptr<ID3D11RenderTargetView> output;
-    check_hresult(device->CreateShaderResourceView(source.get(), nullptr, input.put()));
-    check_hresult(device->CreateRenderTargetView(destination.get(), nullptr, output.put()));
     D3D11_VIEWPORT viewport{0, 0, static_cast<float>(output_desc.Width), static_cast<float>(output_desc.Height), 0, 1};
     context->RSSetViewports(1, &viewport);
     context->RSSetState(rasterizer.get());
-    platform::bind_pixel(context, output, input, constants, sampler);
+    platform::bind_pixel(context, destination.render_view, input, constants, sampler);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(vertex_shader.get(), nullptr, 0);
     context->PSSetShader(pixel_shader.get(), nullptr, 0);
@@ -162,35 +194,45 @@ com_ptr<ID3D11Texture2D> Graphics::render(const com_ptr<ID3D11Texture2D>& source
     std::erase_if(retired, [](const Retired& entry) {
         return std::chrono::steady_clock::now() - entry.time > std::chrono::seconds(2);
     });
-    auto region = bounds(source, width, height, options.trim != 0);
+    auto input = source_view(source);
+    auto region = bounds(input, width, height, options.trim != 0);
     auto crop = std::min(static_cast<float>(options.crop_top), region.height - 1);
     region.top += crop;
     region.height -= crop;
     auto target_width = static_cast<uint32_t>(region.width);
     auto target_height = static_cast<uint32_t>(region.height);
     if (target_width != output_width || target_height != output_height) {
-        constexpr uint64_t memory_budget = 128 * 1024 * 1024;
         const auto requested_bytes = static_cast<uint64_t>(target_width) * target_height * 4 * textures.size();
-        if (requested_bytes > memory_budget) throw std::invalid_argument("Captured image exceeds the GPU texture budget.");
-        uint64_t retained_bytes = static_cast<uint64_t>(output_width) * output_height * 4 * textures.size();
+        const auto current_bytes = static_cast<uint64_t>(output_width) * output_height * 4 * textures.size();
+        uint64_t retired_bytes = 0;
         for (const auto& entry : retired) {
             D3D11_TEXTURE2D_DESC description{};
-            entry.textures[0]->GetDesc(&description);
-            retained_bytes += static_cast<uint64_t>(description.Width) * description.Height * 4 * textures.size();
+            entry.textures[0].texture->GetDesc(&description);
+            retired_bytes += static_cast<uint64_t>(description.Width) * description.Height * 4 * textures.size();
         }
-        if (requested_bytes + retained_bytes > memory_budget) return {};
-        std::array<com_ptr<ID3D11Texture2D>, 3> fresh;
-        for (auto& entry : fresh) entry = texture(target_width, target_height, false);
-        if (textures[0]) retired.push_back({std::move(textures), std::chrono::steady_clock::now()});
+        const auto action = texture_pool::resize(requested_bytes, current_bytes, retired_bytes);
+        if (action == texture_pool::Resize::reject) throw std::invalid_argument("Captured image exceeds the GPU texture budget.");
+        if (action == texture_pool::Resize::defer) return {};
+        if (action == texture_pool::Resize::rebuild) {
+            if (release_consumer) release_consumer();
+            textures = {};
+            retired.clear();
+            output_width = output_height = 0;
+            next = 0;
+            context->Flush();
+        }
+        std::array<Target, 3> fresh;
+        for (auto& entry : fresh) entry = target(target_width, target_height);
+        if (textures[0].texture) retired.push_back({std::move(textures), std::chrono::steady_clock::now()});
         textures = std::move(fresh);
         output_width = target_width;
         output_height = target_height;
         next = 0;
     }
-    auto target = textures[next++ % textures.size()];
-    draw(source, target, region);
+    const auto& output = textures[next++ % textures.size()];
+    draw(source, input, output, region);
     completed();
-    return target;
+    return output.texture;
 }
 
 void Graphics::completed() {
@@ -210,24 +252,31 @@ void Graphics::completed() {
 }
 
 PixelPreview Graphics::preview(const com_ptr<ID3D11Texture2D>& source) {
+    PixelPreview result;
+    preview(source, result);
+    return result;
+}
+
+void Graphics::preview(const com_ptr<ID3D11Texture2D>& source, PixelPreview& result) {
     D3D11_TEXTURE2D_DESC desc{};
     source->GetDesc(&desc);
     auto scale = std::min({1.0, 640.0 / desc.Width, 240.0 / desc.Height});
     auto width = std::max(1u, static_cast<uint32_t>(desc.Width * scale));
     auto height = std::max(1u, static_cast<uint32_t>(desc.Height * scale));
     D3D11_TEXTURE2D_DESC current{};
-    if (preview_target) preview_target->GetDesc(&current);
+    if (preview_target.texture) preview_target.texture->GetDesc(&current);
     if (current.Width != width || current.Height != height) {
-        preview_target = texture(width, height, false);
-        preview_readback = texture(width, height, true);
+        auto fresh_target = target(width, height);
+        auto fresh_readback = texture(width, height, true);
+        preview_target = std::move(fresh_target);
+        preview_readback = std::move(fresh_readback);
     }
-    draw(source, preview_target, {0, 0, static_cast<float>(desc.Width), static_cast<float>(desc.Height)});
-    context->CopyResource(preview_readback.get(), preview_target.get());
+    auto input = preview_view(source);
+    draw(source, input, preview_target, {0, 0, static_cast<float>(desc.Width), static_cast<float>(desc.Height)});
+    context->CopyResource(preview_readback.get(), preview_target.texture.get());
     completed();
     platform::ReadMapping mapping(context, preview_readback.as<ID3D11Resource>());
-    PixelPreview result;
+    mapping.bgra(width, height, result.pixels);
     result.width = width;
     result.height = height;
-    result.pixels = mapping.bgra(width, height);
-    return result;
 }

@@ -93,6 +93,7 @@ public:
         overlay_check(vr::VROverlay()->ShowOverlay(handle));
     }
     void hide() { overlay_check(vr::VROverlay()->HideOverlay(handle)); }
+    void clear_texture() { overlay_check(vr::VROverlay()->ClearOverlayTexture(handle)); }
     bool quitting() {
         vr::VREvent_t event{};
         for (int count = 0; count < 32 && vr::VROverlay()->PollNextOverlayEvent(handle, &event, sizeof(event)); ++count) {
@@ -141,7 +142,8 @@ public:
     int start(HWND window, const BridgeOptions& requested) {
         std::lock_guard control_guard(control);
         if (disposed) return E_HANDLE;
-        if (!valid(requested) || !IsWindow(window)) return E_INVALIDARG;
+        if (!valid(requested)) return reject_start(L"捕获参数无效或接口结构不匹配。");
+        if (!IsWindow(window)) return reject_start(L"字幕窗口已失效，请刷新来源后重新选择。");
         stop_worker();
         DWORD process_id = 0;
         GetWindowThreadProcessId(window, &process_id);
@@ -151,7 +153,6 @@ public:
             error.clear();
             stats = {sizeof(BridgeStats), 1, 0, 0, 0, 0, 0};
             preview = {};
-            preview_sequence = 0;
         }
         stopping = false;
         worker = std::jthread([self = shared_from_this(), window, process_id] { self->run(window, process_id); });
@@ -208,6 +209,11 @@ public:
     PixelPreview preview;
     uint64_t preview_sequence = 0;
 private:
+    int reject_start(std::wstring_view details) {
+        std::lock_guard lock(mutex);
+        error = platform::error_text(L"检查捕获请求", E_INVALIDARG, details);
+        return E_INVALIDARG;
+    }
     void stop_worker() {
         stopping = true;
         signal->wake();
@@ -215,41 +221,50 @@ private:
         std::lock_guard lock(mutex);
         stats.state = 0;
         preview = {};
-        preview_sequence = 0;
     }
     void run(HWND window, DWORD process_id) noexcept {
+        std::wstring_view stage = L"初始化捕获线程";
         try {
             platform::ApartmentScope apartment;
-            capture(window, process_id);
+            capture(window, process_id, stage);
         } catch (const hresult_error& exception) {
-            fail(std::wstring(exception.message()));
+            fail(platform::error_text(stage, exception.code(), std::wstring(exception.message())));
         } catch (const std::exception& exception) {
-            fail(std::wstring(to_hstring(exception.what())));
+            fail(std::wstring(stage) + L"：" + std::wstring(to_hstring(exception.what())));
         } catch (...) {
             fail(L"原生捕获发生未知错误。");
         }
     }
-    void capture(HWND window, DWORD process_id) {
+    void capture(HWND window, DWORD process_id, std::wstring_view& stage) {
+        stage = L"检查 Windows 窗口捕获支持";
         if (!GraphicsCaptureSession::IsSupported()) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
         auto current = configuration();
         std::unique_ptr<Graphics> graphics_storage;
+        stage = L"连接 SteamVR";
         auto overlay = current.vr ? std::make_unique<Overlay>() : nullptr;
-        graphics_storage = std::make_unique<Graphics>(overlay ? overlay->adapter() : 0);
+        stage = L"初始化 Direct3D 图形资源";
+        graphics_storage = std::make_unique<Graphics>(overlay ? overlay->adapter() : 0,
+            [&overlay] { if (overlay) overlay->clear_texture(); });
         auto& graphics = *graphics_storage;
         com_ptr<IInspectable> inspectable;
+        stage = L"创建窗口捕获 Direct3D 设备";
         check_hresult(CreateDirect3D11DeviceFromDXGIDevice(graphics.device.as<IDXGIDevice>().get(), inspectable.put()));
         auto capture_device = inspectable.as<IDirect3DDevice>();
+        stage = L"创建目标窗口捕获对象（CreateForWindow）";
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{nullptr};
         check_hresult(interop->CreateForWindow(window, guid_of<GraphicsCaptureItem>(), put_abi(item)));
+        stage = L"读取目标窗口捕获尺寸";
         auto size = item.Size();
         if (size.Width <= 0 || size.Height <= 0 || static_cast<uint64_t>(size.Width) * size.Height > 16 * 1024 * 1024) {
             throw hresult_error(E_OUTOFMEMORY, L"捕获窗口尺寸不受支持，请缩小字幕窗口。");
         }
         CaptureLifetime lifetime;
+        stage = L"创建窗口捕获帧池";
         lifetime.pool = Direct3D11CaptureFramePool::CreateFreeThreaded(capture_device,
             DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto pool = lifetime.pool;
+        stage = L"创建窗口捕获会话";
         lifetime.session = pool.CreateCaptureSession(item);
         auto session = lifetime.session;
         auto frame_event = pool.FrameArrived(auto_revoke, [wake = signal](auto&&, auto&&) { wake->wake(); });
@@ -259,16 +274,19 @@ private:
             wake->wake();
         });
         {
+            stage = L"设置捕获光标";
             if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
                 L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled")) {
                 session.IsCursorCaptureEnabled(false);
             }
+            stage = L"设置窗口捕获边框";
             if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
                 L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
                 session.IsBorderRequired(current.border != 0);
             } else if (!current.border) {
                 throw hresult_error(E_NOTIMPL, L"当前 Windows 不支持关闭捕获边框，请开启边框后重试。");
             }
+            stage = L"启动 Windows 窗口捕获";
             session.StartCapture();
             com_ptr<ID3D11Texture2D> saved;
             BridgeOptions rendered{};
@@ -280,7 +298,9 @@ private:
             uint32_t surface_width = 0;
             uint32_t surface_height = 0;
             bool hidden = false;
+            PixelPreview updated;
             while (!stopping) {
+                stage = L"检查字幕窗口和 VR 连接状态";
                 WaitForSingleObject(signal->value.get(), 50);
                 if (stopping) break;
                 DWORD owner = 0;
@@ -296,6 +316,7 @@ private:
                 }
                 current = configuration();
                 if (overlay) overlay->configure(current);
+                stage = L"读取窗口捕获帧";
                 auto frame = pool.TryGetNextFrame();
                 platform::ScopeExit release_frame([&frame] { if (frame) frame.Close(); });
                 if (frame) {
@@ -315,6 +336,7 @@ private:
                     if (static_cast<uint64_t>(incoming_size.Width) * incoming_size.Height > 16 * 1024 * 1024) {
                         throw hresult_error(E_OUTOFMEMORY, L"捕获窗口过大，请缩小字幕窗口。");
                     }
+                    stage = L"读取捕获图像纹理";
                     auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                     com_ptr<ID3D11Texture2D> source;
                     check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), source.put_void()));
@@ -331,20 +353,25 @@ private:
                         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
                         desc.CPUAccessFlags = 0;
                         desc.MiscFlags = 0;
+                        stage = L"创建捕获图像副本纹理";
                         com_ptr<ID3D11Texture2D> fresh;
                         check_hresult(graphics.device->CreateTexture2D(&desc, nullptr, fresh.put()));
+                        graphics.reset_source();
                         saved = std::move(fresh);
                     }
+                    stage = L"复制捕获图像";
                     graphics.context->CopyResource(saved.get(), source.get());
                     frame.Close();
                     frame = nullptr;
                     if (incoming_size != size) {
+                        stage = L"按窗口尺寸重建捕获帧池";
                         size = incoming_size;
                         pool.Recreate(capture_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
                     }
                     pending = true;
                     ++serial;
                 }
+                if (!current.preview) rendered.preview = 0;
                 if (!current.vr && !current.preview) continue;
                 bool crop_changed = current.crop_top != rendered.crop_top || current.trim != rendered.trim;
                 bool preview_changed = current.preview && !rendered.preview;
@@ -353,13 +380,15 @@ private:
                 if (!saved || (!(pending && now - last_frame >= std::chrono::milliseconds(50))
                     && !crop_changed && !preview_due && !hidden)) continue;
                 auto processing_start = Clock::now();
+                stage = L"裁剪和绘制字幕图像";
                 auto texture = graphics.render(saved, surface_width, surface_height, current);
                 if (!texture) continue;
+                stage = L"提交 SteamVR 字幕纹理";
                 if (overlay) overlay->submit(texture, graphics.context);
-                PixelPreview updated;
                 bool update_preview = current.preview && (preview_changed || now - last_preview >= std::chrono::milliseconds(100));
                 if (update_preview) {
-                    updated = graphics.preview(texture);
+                    stage = L"生成桌面字幕预览";
+                    graphics.preview(texture, updated);
                     last_preview = now;
                     preview_serial = serial;
                 }
@@ -378,7 +407,7 @@ private:
                     stats.height = output_desc.Height;
                     stats.processing_ms = std::chrono::duration<double, std::milli>(Clock::now() - processing_start).count();
                     if (update_preview) {
-                        preview = std::move(updated);
+                        std::swap(preview, updated);
                         ++preview_sequence;
                     }
                 }
@@ -427,7 +456,7 @@ Registry& registry() {
 }
 }
 
-uint32_t __cdecl bridge_version() noexcept { return 6; }
+uint32_t __cdecl bridge_version() noexcept { return 8; }
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }
@@ -483,16 +512,20 @@ int32_t __cdecl bridge_error(BridgeId bridge, BridgeError& output) noexcept {
         return S_OK;
     } catch (...) { return E_FAIL; }
 }
-int32_t __cdecl bridge_preview(BridgeId bridge, BridgePreview& output) noexcept {
+int32_t __cdecl bridge_preview(BridgeId bridge, uint64_t after_sequence, BridgePreview& output) noexcept {
     try {
         if (output.size != sizeof(BridgePreview)) return E_INVALIDARG;
         auto instance = registry().acquire(bridge);
         if (!instance) return E_HANDLE;
         std::lock_guard lock(instance->mutex);
+        output.sequence = instance->preview_sequence;
+        if (instance->preview_sequence == after_sequence || instance->preview.pixels.empty()) {
+            output.width = output.height = 0;
+            return S_FALSE;
+        }
         if (instance->preview.pixels.size() > output.pixels.size()) return E_BOUNDS;
         output.width = instance->preview.width;
         output.height = instance->preview.height;
-        output.sequence = instance->preview_sequence;
         std::copy(instance->preview.pixels.begin(), instance->preview.pixels.end(), output.pixels.begin());
         return S_OK;
     } catch (...) { return E_FAIL; }

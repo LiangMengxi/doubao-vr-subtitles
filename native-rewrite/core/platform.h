@@ -9,7 +9,13 @@
 #include <vector>
 #include <memory>
 
+struct BridgeCaptionButton;
+
 namespace platform {
+std::wstring error_text(std::wstring_view stage, HRESULT code, std::wstring_view details);
+void check_result(HRESULT code, std::wstring_view stage);
+bool caption_button(uintptr_t window, uint32_t process_id, BridgeCaptionButton& button);
+bool close_caption(const BridgeCaptionButton& button);
 struct AudioDevice {
     std::wstring id;
     std::wstring name;
@@ -17,7 +23,14 @@ struct AudioDevice {
 };
 std::vector<AudioDevice> audio_devices(uint32_t flow);
 void restore_audio(std::wstring_view playback, std::wstring_view microphone);
-void register_steamvr(std::wstring_view manifest, bool enabled);
+struct SteamVrState {
+    bool installed = false;
+    bool auto_launch = false;
+    bool dashboard = false;
+    std::wstring executable, arguments;
+};
+SteamVrState steamvr_state();
+void register_steamvr(std::wstring_view manifest, bool installed, bool auto_launch);
 
 struct MicrophoneProgress {
     uint64_t frames = 0;
@@ -81,7 +94,8 @@ public:
     ReadMapping(ReadMapping&&) = delete;
     ReadMapping& operator=(ReadMapping&&) = delete;
     std::array<uint32_t, 4> extent() const;
-    std::vector<uint8_t> bgra(uint32_t width, uint32_t height) const;
+    void bgra(uint32_t width, uint32_t height, std::vector<uint8_t>& output) const;
+    std::vector<uint8_t> caption_pixels(uint32_t width, uint32_t height) const;
 private:
     winrt::com_ptr<ID3D11DeviceContext> context;
     winrt::com_ptr<ID3D11Resource> resource;

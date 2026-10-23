@@ -53,15 +53,17 @@ internal static class BackgroundFiles
         double scale = Math.Min(1, MaximumEdge / (double)Math.Max(width, height));
         return ((uint)Math.Max(1, Math.Round(width * scale)), (uint)Math.Max(1, Math.Round(height * scale)));
     }
-    public static void Cleanup(string dataDirectory, string current)
+    public static void Cleanup(string dataDirectory, string current, params string[] protectedImages)
     {
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { current };
-        var backup = Path.Combine(dataDirectory, "settings.json.bak");
+        keep.UnionWith(protectedImages);
         try
         {
-            if (File.Exists(backup))
+            foreach (var name in new[] { "settings.json", "settings.json.bak" })
             {
-                using var document = JsonDocument.Parse(File.ReadAllText(backup));
+                string path = Path.Combine(dataDirectory, name);
+                if (!File.Exists(path)) continue;
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
                 if (document.RootElement.ValueKind != JsonValueKind.Object) return;
                 if (document.RootElement.TryGetProperty("background_image", out var image) && image.ValueKind == JsonValueKind.String) keep.Add(image.GetString() ?? "");
             }

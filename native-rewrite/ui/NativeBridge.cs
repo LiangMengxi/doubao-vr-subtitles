@@ -65,6 +65,12 @@ internal sealed class PreviewBuffer : SafeBuffer
 internal static class NativeBridge
 {
     private const string Library = "DoubaoVR.Core.dll";
+    public const uint AbiVersion = 8;
+
+    public static void EnsureVersion()
+    {
+        if (Version() != AbiVersion) throw new InvalidOperationException("原生核心接口版本不匹配。");
+    }
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, in int value, uint size);
@@ -87,6 +93,13 @@ internal static class NativeBridge
     public static extern void Destroy(nint bridge);
     [DllImport(Library, EntryPoint = "bridge_start", CallingConvention = CallingConvention.Cdecl)]
     public static extern int Start(BridgeHandle bridge, nuint hwnd, in BridgeOptions options);
+    public static void StartCapture(BridgeHandle bridge, nuint hwnd, in BridgeOptions options)
+    {
+        int result = Start(bridge, hwnd, options);
+        if (result >= 0) return;
+        string detail = Error(bridge);
+        throw new COMException(string.IsNullOrWhiteSpace(detail) ? $"启动字幕捕获失败（0x{unchecked((uint)result):X8}）。" : detail, result);
+    }
     [DllImport(Library, EntryPoint = "bridge_configure", CallingConvention = CallingConvention.Cdecl)]
     public static extern int Configure(BridgeHandle bridge, in BridgeOptions options);
     [DllImport(Library, EntryPoint = "bridge_stop", CallingConvention = CallingConvention.Cdecl)]
@@ -98,12 +111,14 @@ internal static class NativeBridge
     [DllImport(Library, EntryPoint = "bridge_error", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
     private static extern int ReadError(BridgeHandle bridge, ref BridgeError output);
     [DllImport(Library, EntryPoint = "bridge_preview", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ReadPreview(BridgeHandle bridge, PreviewBuffer output);
+    private static extern int ReadPreview(BridgeHandle bridge, ulong afterSequence, PreviewBuffer output);
 
-    public static uint Preview(BridgeHandle bridge, PreviewBuffer buffer, byte[] output,
+    public static uint Preview(BridgeHandle bridge, PreviewBuffer buffer, byte[] output, ulong afterSequence,
         out uint width, out uint height, out ulong sequence)
     {
-        Marshal.ThrowExceptionForHR(ReadPreview(bridge, buffer));
+        int result = ReadPreview(bridge, afterSequence, buffer);
+        Marshal.ThrowExceptionForHR(result);
+        if (result == 1) { width = height = 0; sequence = afterSequence; return 0; }
         return buffer.CopyTo(output, out width, out height, out sequence);
     }
 

@@ -7,6 +7,8 @@ namespace DoubaoVR.Desktop;
 internal sealed record CaptionWindow(nint Handle, uint ProcessId, string Title, string ClassName,
     int Width, int Height, long Style)
 {
+    public bool IsCaption => Title.Length == 0 && ClassName == "Chrome_WidgetWin_1" && (Style & 0x80) != 0 && Score >= 150;
+
     public int Score
     {
         get

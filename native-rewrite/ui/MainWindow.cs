@@ -19,7 +19,6 @@ internal sealed partial class MainWindow : Window
     private readonly SemaphoreSlim operations = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherQueueTimer timer;
-    private readonly DispatcherQueueTimer saveTimer;
     private readonly Grid root = new();
     private readonly ComboBox sources = new() { HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 260 };
     private readonly TextBlock status = new() { Text = "未连接", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .7 };
@@ -43,6 +42,7 @@ internal sealed partial class MainWindow : Window
     public MainWindow(bool smokeTest)
     {
         this.smokeTest = smokeTest;
+        preferences = new(DispatcherQueue, ConfigureAsync, PersistSettingsAsync, PreferenceFailure);
         Title = "豆包VR字幕";
         AppWindow.Resize(new SizeInt32(590, 740));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
@@ -66,24 +66,16 @@ internal sealed partial class MainWindow : Window
         {
             if (!arguments.DidPresenterChange) return;
             previewVisible = selectedPage == 0 && (AppWindow.Presenter is not OverlappedPresenter current || current.State != OverlappedPresenterState.Minimized);
-            ApplyConfiguration();
+            RequestLiveConfiguration();
         };
         AppWindow.Closing += OnClosing;
-        saveTimer = DispatcherQueue.CreateTimer();
-        saveTimer.Interval = TimeSpan.FromMilliseconds(200);
-        saveTimer.IsRepeating = false;
-        saveTimer.Tick += async (_, _) =>
-        {
-            try { settings.Save(); await ConfigureAsync(); }
-            catch (Exception exception) { Report(exception); }
-        };
         timer = DispatcherQueue.CreateTimer();
         timer.Interval = TimeSpan.FromMilliseconds(100);
         timer.Tick += Tick;
         timer.Start();
         try
         {
-            if (NativeBridge.Version() != 6) throw new InvalidOperationException("原生核心接口版本不匹配。");
+            NativeBridge.EnsureVersion();
             bridge = new BridgeHandle();
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
         }
@@ -114,22 +106,8 @@ internal sealed partial class MainWindow : Window
         var home = Column(12);
         var controls = Column();
         var actions = EqualColumns(2);
-        var launch = new Button { Content = "开启字幕", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch, Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
-        launch.Click += async (_, _) =>
-        {
-            launch.IsEnabled = false;
-            try
-            {
-                status.Text = "正在开启字幕…";
-                var window = await ShortcutService.OpenAsync(lifetime.Token);
-                if (shuttingDown) return;
-                RefreshSources(window.Handle);
-                await StartAsync(vrEnabled);
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception exception) { Report(exception); }
-            finally { launch.IsEnabled = true; }
-        };
+        launchButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+        launchButton.Click += async (_, _) => await ToggleCaptionAsync();
         captureButton.Click += async (_, _) =>
         {
             try { if (running) await StopAsync(); else await StartAsync(false); }
@@ -140,7 +118,7 @@ internal sealed partial class MainWindow : Window
             try { await StartAsync(!vrEnabled); }
             catch (Exception exception) { Report(exception); }
         };
-        AddCell(actions, launch, 0);
+        AddCell(actions, launchButton, 0);
         AddCell(actions, vrButton, 1);
         controls.Children.Add(actions);
         var imagePanel = new Grid { MinHeight = 110, MaxHeight = 150 };
@@ -175,7 +153,7 @@ internal sealed partial class MainWindow : Window
         sourceCard.Children.Add(sourceActions);
         sources.SelectionChanged += async (_, _) =>
         {
-            if (changingSources || !running || shuttingDown) return;
+            if (changingSources || !running || shuttingDown || captions.IsBusy) return;
             try { await StartAsync(vrEnabled); } catch (Exception exception) { Report(exception); }
         };
         audioSection = SettingsSection("音频设备", AudioSettings());
@@ -204,7 +182,8 @@ internal sealed partial class MainWindow : Window
         border.Toggled += async (_, _) =>
         {
             settings.Border = border.IsOn;
-            try { settings.Save(); if (running) await StartAsync(vrEnabled); }
+            ApplyConfiguration();
+            try { if (running) await StartAsync(vrEnabled); }
             catch (Exception exception) { Report(exception); }
         };
         sourceCard.Children.Add(border);
@@ -212,6 +191,7 @@ internal sealed partial class MainWindow : Window
         preferences.Children.Add(SettingsSection("主题与背景", appearance));
         preferences.Children.Add(SettingsSection("字幕捕获", sourceCard));
         preferences.Children.Add(SettingsSection("程序设置", behavior));
+        preferences.Children.Add(SettingsSection("关于", AboutSettings()));
         var pageHost = new Grid();
         var navigation = EqualColumns(3);
         var pageButtons = new List<ToggleButton>();
@@ -226,7 +206,7 @@ internal sealed partial class MainWindow : Window
                 pages[index].Visibility = index == currentIndex ? Visibility.Visible : Visibility.Collapsed;
             }
             previewVisible = selectedPage == 0 && (AppWindow.Presenter is not OverlappedPresenter current || current.State != OverlappedPresenterState.Minimized);
-            ApplyConfiguration();
+            RequestLiveConfiguration();
         };
         for (int pageIndex = 0; pageIndex < entries.Length; pageIndex++)
         {
@@ -321,13 +301,17 @@ internal sealed partial class MainWindow : Window
         surface.RequestedTheme = root.RequestedTheme = theme;
         titleBar?.Apply();
     }
-    private void ApplyConfiguration() { if (!shuttingDown && saveTimer != null) { saveTimer.Stop(); saveTimer.Start(); } }
-
     private async Task ConfigureAsync()
     {
         if (!running || bridge == null || shuttingDown) return;
         await operations.WaitAsync();
-        try { if (!shuttingDown && running) Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, settings.Options(vrEnabled, previewVisible))); }
+        try
+        {
+            if (shuttingDown || !running) return;
+            var options = settings.Options(vrEnabled, previewVisible);
+            options.Border = captureBorder ? 1u : 0;
+            await Task.Run(() => Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, options)));
+        }
         finally { operations.Release(); }
     }
 
@@ -348,29 +332,38 @@ internal sealed partial class MainWindow : Window
 
     private async Task StartAsync(bool enableVr)
     {
+        if (shuttingDown || captions.IsClosing) return;
+        long requestedEpoch = captureEpoch;
         if (bridge == null) throw new InvalidOperationException("请先构建原生核心 DLL。");
         if (sources.SelectedItem is not CaptionWindow source) throw new InvalidOperationException("请先打开豆包字幕并选择捕获来源。");
+        if (!WindowSource.Same(source)) throw new InvalidOperationException("字幕来源窗口已变化，请刷新来源后重新选择。");
         var options = settings.Options(enableVr, previewVisible);
         await operations.WaitAsync();
         try
         {
-            if (shuttingDown) return;
+            if (shuttingDown || captions.IsClosing || requestedEpoch != captureEpoch) return;
+            captureChanging = true;
+            UpdateCaptionControls();
             captureButton.IsEnabled = vrButton.IsEnabled = false;
             status.Text = "正在连接捕获…";
-            await Task.Run(() => Marshal.ThrowExceptionForHR(NativeBridge.Start(bridge, (nuint)source.Handle, options)));
+            Log.Write($"Capture request: class={source.ClassName}, size={source.Width}x{source.Height}, vr={enableVr}, border={settings.Border}.");
+            await Task.Run(() => NativeBridge.StartCapture(bridge, (nuint)source.Handle, options));
             running = true;
             reconnecting = false;
             vrEnabled = enableVr;
+            captureBorder = options.Border != 0;
             connected = source;
             previewSequence = 0;
             captureButton.Content = "停止连接";
             vrButton.Content = enableVr ? "关闭VR" : "开启VR";
+            RequestLiveConfiguration();
         }
-        finally { captureButton.IsEnabled = vrButton.IsEnabled = true; operations.Release(); }
+        finally { captureChanging = false; UpdateCaptionControls(); operations.Release(); }
     }
 
     private async Task StopAsync()
     {
+        ++captureEpoch;
         await operations.WaitAsync();
         try
         {
@@ -399,6 +392,8 @@ internal sealed partial class MainWindow : Window
         tickBusy = true;
         try
         {
+            await RefreshCaptionAsync();
+            if (shuttingDown || captions.IsBusy) return;
             if (!running && reconnecting && DateTime.UtcNow >= nextDiscovery)
             {
                 nextDiscovery = DateTime.UtcNow.AddSeconds(3);
@@ -415,12 +410,12 @@ internal sealed partial class MainWindow : Window
                 await StopAsync();
                 status.Text = message;
                 Log.Write(message);
-                if (reconnect) { reconnecting = true; nextDiscovery = DateTime.UtcNow.AddSeconds(3); }
+                if (reconnect && !shuttingDown && !captions.IsBusy) { reconnecting = true; nextDiscovery = DateTime.UtcNow.AddSeconds(3); }
                 return;
             }
             status.Text = stats.State == 1 ? "等待字幕…" : vrEnabled ? "VR已开启" : "已连接";
             if (!previewVisible) return;
-            uint count = NativeBridge.Preview(bridge, nativePreview, previewBuffer, out uint width, out uint height, out ulong sequence);
+            uint count = NativeBridge.Preview(bridge, nativePreview, previewBuffer, previewSequence, out uint width, out uint height, out ulong sequence);
             if (count == 0 || count > previewBuffer.Length || sequence == previewSequence) return;
             if (bitmap == null || bitmap.PixelWidth != width || bitmap.PixelHeight != height) bitmap = new WriteableBitmap((int)width, (int)height);
             using (var stream = bitmap.PixelBuffer.AsStream()) stream.Write(previewBuffer, 0, (int)count);
@@ -429,7 +424,8 @@ internal sealed partial class MainWindow : Window
             placeholder.Visibility = Visibility.Collapsed;
             previewSequence = sequence;
         }
-        catch (Exception exception) { Report(exception); }
+        catch (OperationCanceledException) when (shuttingDown) { }
+        catch (Exception exception) { if (!shuttingDown) Report(exception); }
         finally { tickBusy = false; }
     }
 
@@ -461,16 +457,17 @@ internal sealed partial class MainWindow : Window
         Log.Write("Shutdown requested; releasing native core.");
         lifetime.Cancel();
         timer.Stop();
-        saveTimer.Stop();
         root.IsHitTestVisible = false;
         status.Text = "正在移除 VR 悬浮并退出…";
         try
         {
-            try { settings.Save(); } catch (Exception exception) { Log.Write(exception.ToString()); }
+            await preferences.StopAsync();
             await operations.WaitAsync();
             try { if (bridge != null) await Task.Run(() => bridge.Dispose()); }
             finally { operations.Release(); }
             Log.Write("Native core release completed.");
+            try { await backgroundImport; } catch (Exception exception) { Log.Write(exception.ToString()); }
+            try { await PersistSettingsAsync(); } catch (Exception exception) { Log.Write(exception.ToString()); }
             if (policy.CloseDoubao)
             {
                 try { await Task.Run(DoubaoExitService.CloseAsync); }
@@ -482,7 +479,7 @@ internal sealed partial class MainWindow : Window
             }
         }
         catch (Exception exception) { Log.Write(exception.ToString()); }
-        finally { nativePreview.Dispose(); closeReady = true; Log.Write("Window closed; native core disposed."); Close(); }
+        finally { settingsStore.Dispose(); nativePreview.Dispose(); closeReady = true; Log.Write("Window closed; native core disposed."); Close(); }
     }
 
     private void Report(Exception exception) { status.Text = exception.Message; Log.Write(exception.ToString()); }
