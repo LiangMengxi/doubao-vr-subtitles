@@ -36,6 +36,7 @@ internal sealed partial class MainWindow : Window
     private WriteableBitmap? bitmap;
     private DateTime nextDiscovery = DateTime.MinValue;
     private readonly bool smokeTest;
+    private bool curvatureWarningReported;
     private readonly TitleBarAppearance titleBar;
     private readonly DateTime opened = DateTime.UtcNow;
 
@@ -141,6 +142,14 @@ internal sealed partial class MainWindow : Window
         position.Children.Add(Slider("左右倾斜", -45, 45, 1, settings.Yaw, value => settings.Yaw = (float)value, value => $"{value:F0}°", ("归零", 0)));
         position.Children.Add(Slider("不透明度", .1, 1, .05, settings.Opacity, value => settings.Opacity = (float)value, value => $"{value * 100:F0}%"));
         advanced.Children.Add(Card(position));
+        var curvature = Column();
+        curvature.Children.Add(Slider("曲面程度", 0, 90, 5, settings.CurvatureDegrees, value => settings.CurvatureDegrees = (float)value,
+            value => $"{value:F0}°", ("平面", 0), ("轻微", 30), ("标准", 60)));
+        advanced.Children.Add(new SettingsExpander
+        {
+            Style = (Style)Application.Current.Resources["SettingsExpanderStyle"],
+            Header = "曲面", Content = curvature, IsExpanded = false
+        });
         var preferences = Column(12);
         var sourceCard = Column();
         sources.Header = "捕获窗口";
@@ -196,7 +205,7 @@ internal sealed partial class MainWindow : Window
         var navigation = EqualColumns(3);
         var pageButtons = new List<ToggleButton>();
         var pages = new List<ScrollViewer>();
-        var entries = new[] { ("字幕", home), ("位置", advanced), ("设置", preferences) };
+        var entries = new[] { ("字幕", home), ("更多调节", advanced), ("设置", preferences) };
         showPage = currentIndex =>
         {
             selectedPage = currentIndex;
@@ -413,7 +422,16 @@ internal sealed partial class MainWindow : Window
                 if (reconnect && !shuttingDown && !captions.IsBusy) { reconnecting = true; nextDiscovery = DateTime.UtcNow.AddSeconds(3); }
                 return;
             }
-            status.Text = stats.State == 1 ? "等待字幕…" : vrEnabled ? "VR已开启" : "已连接";
+            if (vrEnabled && stats.CurvatureFallback != 0)
+            {
+                status.Text = "曲面不可用，已恢复平面字幕。";
+                if (!curvatureWarningReported) { curvatureWarningReported = true; Log.Write(NativeBridge.Error(bridge)); }
+            }
+            else
+            {
+                curvatureWarningReported = false;
+                status.Text = stats.State == 1 ? "等待字幕…" : vrEnabled ? "VR已开启" : "已连接";
+            }
             if (!previewVisible) return;
             uint count = NativeBridge.Preview(bridge, nativePreview, previewBuffer, previewSequence, out uint width, out uint height, out ulong sequence);
             if (count == 0 || count > previewBuffer.Length || sequence == previewSequence) return;

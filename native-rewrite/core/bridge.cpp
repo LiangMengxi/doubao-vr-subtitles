@@ -2,6 +2,7 @@
 #include "graphics.h"
 #include "platform.h"
 #include "overlay_transform.h"
+#include "overlay_curvature.h"
 #include "microphone_keeper.h"
 #include <windows.h>
 #include <windows.graphics.capture.interop.h>
@@ -77,7 +78,7 @@ public:
         vr::VRSystem()->GetDXGIOutputInfo(&adapter_index);
         return adapter_index;
     }
-    void configure(const BridgeOptions& options) {
+    bool configure(const BridgeOptions& options) {
         const auto matrix = overlay_transform(options);
         vr::HmdMatrix34_t transform{};
         for (size_t row = 0; row < matrix.size(); ++row) {
@@ -87,7 +88,25 @@ public:
         overlay_check(vr::VROverlay()->SetOverlayAlpha(handle, options.opacity));
         overlay_check(vr::VROverlay()->SetOverlayTransformTrackedDeviceRelative(handle,
             vr::k_unTrackedDeviceIndex_Hmd, &transform));
+        const auto change = curved.update(options.curvature_degrees, [this](float degrees) {
+            if (degrees > 0) {
+                const auto result = vr::VROverlay()->SetOverlayPreCurvePitch(handle, 0.f);
+                if (result != vr::VROverlayError_None) return static_cast<int32_t>(result);
+            }
+            return static_cast<int32_t>(vr::VROverlay()->SetOverlayCurvature(handle, OverlayCurvature::fraction(degrees)));
+        }, [this]() -> std::optional<float> {
+            float actual = 0;
+            if (vr::VROverlay()->GetOverlayCurvature(handle, &actual) != vr::VROverlayError_None) return {};
+            return actual * 360.f;
+        });
+        if (change == OverlayCurvature::Change::failed) {
+            throw hresult_error(E_FAIL, L"曲面设置失败，无法确认已恢复平面，已停止字幕输出。"
+                + to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(static_cast<vr::EVROverlayError>(curved.error())))
+                + L" / " + to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(static_cast<vr::EVROverlayError>(curved.restore_error()))));
+        }
+        return change == OverlayCurvature::Change::updated;
     }
+    const OverlayCurvature& curvature() const noexcept { return curved; }
     void submit(const com_ptr<ID3D11Texture2D>& texture, const com_ptr<ID3D11DeviceContext>& context) {
         overlay_check(static_cast<vr::EVROverlayError>(platform::submit_overlay(handle, texture, context)));
         overlay_check(vr::VROverlay()->ShowOverlay(handle));
@@ -120,6 +139,7 @@ private:
     bool initialized = false;
     std::unique_lock<std::mutex> runtime_lock;
     vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
+    OverlayCurvature curved;
 };
 
 bool valid(const BridgeOptions& options) {
@@ -131,6 +151,7 @@ bool valid(const BridgeOptions& options) {
         && range(options.horizontal, -1.2f, 1.2f) && range(options.vertical, -1.2f, .8f)
         && range(options.opacity, .1f, 1.f) && range(options.pitch, -45.f, 45.f)
         && range(options.yaw, -45.f, 45.f)
+        && range(options.curvature_degrees, 0.f, 90.f)
         && options.crop_top <= 120 && options.trim <= 1 && options.border <= 1
         && options.vr <= 1 && options.preview <= 1;
 }
@@ -220,6 +241,8 @@ private:
         if (worker.joinable()) worker.join();
         std::lock_guard lock(mutex);
         stats.state = 0;
+        stats.curvature_fallback = 0;
+        stats.curvature_degrees = 0;
         preview = {};
     }
     void run(HWND window, DWORD process_id) noexcept {
@@ -315,7 +338,15 @@ private:
                     continue;
                 }
                 current = configuration();
-                if (overlay) overlay->configure(current);
+                stage = L"更新 VR 字幕显示参数";
+                if (overlay && overlay->configure(current)) {
+                    const auto& curve = overlay->curvature();
+                    std::lock_guard lock(mutex);
+                    stats.curvature_fallback = curve.fallback() ? 1u : 0;
+                    stats.curvature_degrees = curve.degrees();
+                    error = curve.fallback() ? L"曲面设置未成功，已恢复平面字幕。"
+                        + to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(static_cast<vr::EVROverlayError>(curve.error()))) : L"";
+                }
                 stage = L"读取窗口捕获帧";
                 auto frame = pool.TryGetNextFrame();
                 platform::ScopeExit release_frame([&frame] { if (frame) frame.Close(); });
@@ -456,7 +487,7 @@ Registry& registry() {
 }
 }
 
-uint32_t __cdecl bridge_version() noexcept { return 8; }
+uint32_t __cdecl bridge_version() noexcept { return 9; }
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }

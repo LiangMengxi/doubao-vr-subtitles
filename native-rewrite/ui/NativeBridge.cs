@@ -9,6 +9,7 @@ internal struct BridgeOptions
     public uint Size;
     public float Width, Distance, Horizontal, Vertical, Opacity, Pitch, Yaw;
     public uint CropTop, Trim, Border, Vr, Preview;
+    public float CurvatureDegrees;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -18,6 +19,8 @@ internal struct BridgeStats
     public ulong Frames, Submitted;
     public uint Width, Height;
     public double ProcessingMs;
+    public uint CurvatureFallback;
+    public float CurvatureDegrees;
 }
 
 internal sealed class BridgeHandle : SafeHandleZeroOrMinusOneIsInvalid
@@ -65,7 +68,7 @@ internal sealed class PreviewBuffer : SafeBuffer
 internal static class NativeBridge
 {
     private const string Library = "DoubaoVR.Core.dll";
-    public const uint AbiVersion = 8;
+    public const uint AbiVersion = 9;
 
     public static void EnsureVersion()
     {

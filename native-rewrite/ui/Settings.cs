@@ -18,6 +18,7 @@ internal sealed class Settings
     [JsonPropertyName("opacity")] public float Opacity { get; set; } = 1;
     [JsonPropertyName("pitch")] public float Pitch { get; set; }
     [JsonPropertyName("yaw")] public float Yaw { get; set; }
+    [JsonPropertyName("curvature_degrees"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public float CurvatureDegrees { get; set; }
     [JsonPropertyName("crop_top")] public float CropTop { get; set; }
     [JsonPropertyName("appearance")] public string Appearance { get; set; } = "system";
     [JsonPropertyName("show_capture_border")] public bool Border { get; set; }
@@ -64,6 +65,7 @@ internal sealed class Settings
         Opacity = Limit(Opacity, .1f, 1, 1);
         Pitch = Limit(Pitch, -45, 45, 0);
         Yaw = Limit(Yaw, -45, 45, 0);
+        CurvatureDegrees = Limit(CurvatureDegrees, 0, 90, 0);
         CropTop = Limit(CropTop, 0, 120, 0);
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
         AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
@@ -90,6 +92,6 @@ internal sealed class Settings
         Size = (uint)Marshal.SizeOf<BridgeOptions>(), Width = Width, Distance = Distance,
         Horizontal = Horizontal, Vertical = Vertical, Opacity = Opacity, Pitch = Pitch, Yaw = Yaw,
         CropTop = (uint)CropTop, Trim = Trim ? 1u : 0, Border = Border ? 1u : 0,
-        Vr = vr ? 1u : 0, Preview = preview ? 1u : 0
+        Vr = vr ? 1u : 0, Preview = preview ? 1u : 0, CurvatureDegrees = CurvatureDegrees
     };
 }

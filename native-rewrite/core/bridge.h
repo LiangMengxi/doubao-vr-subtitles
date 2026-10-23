@@ -24,6 +24,7 @@ struct BridgeOptions {
     uint32_t border;
     uint32_t vr;
     uint32_t preview;
+    float curvature_degrees = 0;
 };
 
 struct BridgeStats {
@@ -34,6 +35,8 @@ struct BridgeStats {
     uint32_t width;
     uint32_t height;
     double processing_ms;
+    uint32_t curvature_fallback = 0;
+    float curvature_degrees = 0;
 };
 
 using BridgeId = uint64_t;
@@ -114,6 +117,8 @@ struct BridgeSteamVrState {
     std::array<wchar_t, 1024> arguments{};
 };
 
+static_assert(sizeof(BridgeOptions) == 56 && offsetof(BridgeOptions, curvature_degrees) == 52);
+static_assert(sizeof(BridgeStats) == 48 && offsetof(BridgeStats, curvature_fallback) == 40);
 static_assert(sizeof(BridgePreview) == 614424 && offsetof(BridgePreview, pixels) == 24);
 static_assert(sizeof(BridgeSteamVrRegistration) == 8208 && offsetof(BridgeSteamVrRegistration, manifest) == 16);
 static_assert(sizeof(BridgeSteamVrState) == 10256 && offsetof(BridgeSteamVrState, executable) == 16);
