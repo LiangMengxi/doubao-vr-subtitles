@@ -403,15 +403,14 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                         check_overlay(vr::VROverlay()->HideOverlay(overlay));
                     }
                     const auto captured_head = head.mDeviceToAbsoluteTracking;
-                    const auto capture_eye = eye.load();
                     mailbox->update(3, L"正在截图…");
                     capture_done = false;
-                    capture_worker = std::jthread([&, captured, captured_head, capture_eye](std::stop_token capture_stop) {
+                    capture_worker = std::jthread([&, captured, captured_head](std::stop_token capture_stop) {
                         platform::ScopeExit complete([&] { capture_done = true; });
                         try {
                             platform::ApartmentScope capture_apartment;
                             Graphics capture_graphics(adapter);
-                            const auto image = platform::mirror_pixels(capture_graphics.device, capture_graphics.context, capture_stop, captured_head, capture_eye);
+                            const auto image = platform::mirror_pixels(capture_graphics.device, capture_graphics.context, capture_stop, captured_head, vr::Eye_Left);
                             spatial::Image result;
                             try { result = spatial::rectify(*captured, image.projection, image.pixels, image.width, image.height, capture_stop); }
                             catch (const std::invalid_argument&) { throw winrt::hresult_invalid_argument(L"选区过小或超出视野，请将选框移到视野中央后重试。"); }

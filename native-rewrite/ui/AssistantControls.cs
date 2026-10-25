@@ -68,19 +68,6 @@ internal sealed partial class MainWindow
         var refresh = new Button { Content = "刷新窗口", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
         refresh.Click += (_, _) => RefreshAssistantSources();
         options.Children.Add(refresh);
-        var eyeSelector = new ComboBox
-        {
-            Header = "空间截图视角",
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            ItemsSource = new[] { "左眼（默认）", "右眼" },
-            SelectedIndex = settings.AssistantCaptureEye == 1 ? 1 : 0
-        };
-        eyeSelector.SelectionChanged += (_, _) =>
-        {
-            settings.AssistantCaptureEye = (uint)(eyeSelector.SelectedIndex == 1 ? 1 : 0);
-            ApplyConfiguration();
-        };
-        options.Children.Add(eyeSelector);
         var activate = new ToggleSwitch { Header = "交互时激活豆包浮窗", IsOn = settings.AssistantActivateOnClick };
         activate.Toggled += (_, _) => { settings.AssistantActivateOnClick = activate.IsOn; ApplyConfiguration(); if (assistantRunning) assistantStatus.Text = "重新连接后生效"; };
         options.Children.Add(activate);
@@ -163,7 +150,7 @@ internal sealed partial class MainWindow
             if (previous != null) await previous.StopAsync();
             assistantStatus.Text = enableVr ? "正在连接 SteamVR…" : "正在连接浮窗…";
             assistantHost = await AssistantHost.StartAsync(target, enableVr, settings.AssistantActivateOnClick, lifetime.Token,
-                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.Border, settings.AssistantWidth, settings.AssistantCaptureEye, settings.AssistantResetOnDashboard);
+                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.Border, settings.AssistantWidth, settings.AssistantResetOnDashboard);
             assistantTarget = target; assistantRunning = true; assistantVrEnabled = enableVr;
             assistantPreviewSequence = 0;
             assistantImageSequence = 0;
@@ -231,7 +218,7 @@ internal sealed partial class MainWindow
         long epoch = assistantEpoch;
         try
         {
-            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantCaptureEye, settings.AssistantResetOnDashboard);
+            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard);
             if (shuttingDown || epoch != assistantEpoch || !ReferenceEquals(host, assistantHost)) return;
             var state = snapshot.Reply;
             if (state.InteractionState != lastAssistantState || state.Message != lastAssistantMessage)

@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace DoubaoVR.Desktop;
 
 internal sealed record AssistantHostRequest(string Action, ulong Window = 0, uint ProcessId = 0, ulong ProcessStarted = 0,
-    bool Vr = false, bool Activate = false, bool Preview = false, ulong AfterPreview = 0, ulong AfterImage = 0, bool Border = false, float Width = .7f, uint Eye = 0, bool ResetOnDashboard = false);
+    bool Vr = false, bool Activate = false, bool Preview = false, ulong AfterPreview = 0, ulong AfterImage = 0, bool Border = false, float Width = .7f, bool ResetOnDashboard = false);
 
 internal sealed record AssistantHostReply(uint CaptureState = 0, uint InteractionState = 0, string Message = "", string Error = "",
     ulong PreviewSequence = 0, uint PreviewWidth = 0, uint PreviewHeight = 0, int PreviewLength = 0,
@@ -30,7 +30,7 @@ internal sealed class AssistantHost
         errors = DrainAsync(process.StandardError.BaseStream);
     }
 
-    public static async Task<AssistantHost> StartAsync(AssistantTarget target, bool vr, bool activate, CancellationToken cancellation, Action<string>? progress = null, bool border = false, float width = .7f, uint eye = 0, bool resetOnDashboard = false)
+    public static async Task<AssistantHost> StartAsync(AssistantTarget target, bool vr, bool activate, CancellationToken cancellation, Action<string>? progress = null, bool border = false, float width = .7f, bool resetOnDashboard = false)
     {
         cancellation.ThrowIfCancellationRequested();
         if (vr) SteamVrAccess.EnsureCompatible();
@@ -53,13 +53,13 @@ internal sealed class AssistantHost
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             deadline.CancelAfter(TimeSpan.FromSeconds(10));
-            await host.CallAsync(new("start", target.Window, target.ProcessId, target.ProcessStarted, vr, activate, Border: border, Width: width, Eye: eye, ResetOnDashboard: resetOnDashboard), deadline.Token);
+            await host.CallAsync(new("start", target.Window, target.ProcessId, target.ProcessStarted, vr, activate, Border: border, Width: width, ResetOnDashboard: resetOnDashboard), deadline.Token);
             string lastStage = "正在启动助手";
             try
             {
                 while (true)
                 {
-                    var snapshot = await host.PollAsync(false, 0, 0, deadline.Token, width, eye, resetOnDashboard);
+                    var snapshot = await host.PollAsync(false, 0, 0, deadline.Token, width, resetOnDashboard);
                     if (snapshot.Reply.Message != lastStage) { lastStage = snapshot.Reply.Message; progress?.Invoke(lastStage); }
                     if (snapshot.Reply.CaptureState == 2 && (!vr || snapshot.Reply.InteractionState == 0 && lastStage == "助手已连接")) return host;
                     await Task.Delay(100, deadline.Token);
@@ -71,8 +71,8 @@ internal sealed class AssistantHost
         catch { await host.StopAsync(); throw; }
     }
 
-    public Task<AssistantHostSnapshot> PollAsync(bool preview, ulong afterPreview, ulong afterImage, CancellationToken cancellation, float width = .7f, uint eye = 0, bool resetOnDashboard = false) =>
-        CallAsync(new("poll", Preview: preview, AfterPreview: afterPreview, AfterImage: afterImage, Width: width, Eye: eye, ResetOnDashboard: resetOnDashboard), cancellation);
+    public Task<AssistantHostSnapshot> PollAsync(bool preview, ulong afterPreview, ulong afterImage, CancellationToken cancellation, float width = .7f, bool resetOnDashboard = false) =>
+        CallAsync(new("poll", Preview: preview, AfterPreview: afterPreview, AfterImage: afterImage, Width: width, ResetOnDashboard: resetOnDashboard), cancellation);
 
     public async Task ResetPositionAsync(CancellationToken cancellation)
     {
@@ -201,10 +201,9 @@ internal sealed class AssistantHost
                     if (identified < 0 || target.ProcessStarted != original.ProcessStarted) throw new InvalidOperationException(error.Text.Length == 0 ? "豆包窗口已变化。" : error.Text);
                     vr = request.Vr;
                     float initialWidth = float.IsFinite(request.Width) ? Math.Clamp(request.Width, .3f, 1.5f) : .7f;
-                    uint initialEye = request.Eye != 0 ? 1u : 0;
                     uint initialReset = request.ResetOnDashboard ? 1u : 0;
                     currentOptions = new BridgeOptions
-                    { Size = 56, Width = initialWidth, Distance = 1, Opacity = 1, CropTop = initialReset, Trim = initialEye, Border = request.Border ? 1u : 0, Vr = vr ? 1u : 0, Preview = 1 };
+                    { Size = 56, Width = initialWidth, Distance = 1, Opacity = 1, CropTop = initialReset, Trim = 0, Border = request.Border ? 1u : 0, Vr = vr ? 1u : 0, Preview = 1 };
                     if (vr)
                     {
                         var options = new AssistantRequest
@@ -216,7 +215,7 @@ internal sealed class AssistantHost
                         };
                         int result = NativeBridge.AssistantStart(bridge, options);
                         if (result < 0) throw new InvalidOperationException(NativeBridge.Error(bridge));
-                        if (initialEye != 0 || initialReset != 0) Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, currentOptions));
+                        if (initialReset != 0) Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, currentOptions));
                     }
                     else NativeBridge.StartCapture(bridge, (nuint)target.Window, currentOptions);
                     started = true;
@@ -234,12 +233,10 @@ internal sealed class AssistantHost
                 }
                 if (request.Action != "poll" || !started) throw new InvalidDataException("助手服务请求无效。");
                 float requestedWidth = float.IsFinite(request.Width) ? Math.Clamp(request.Width, .3f, 1.5f) : currentOptions.Width;
-                uint requestedEye = request.Eye != 0 ? 1u : 0;
                 uint requestedReset = request.ResetOnDashboard ? 1u : 0;
-                if (Math.Abs(requestedWidth - currentOptions.Width) > 1e-4f || requestedEye != currentOptions.Trim || requestedReset != currentOptions.CropTop)
+                if (Math.Abs(requestedWidth - currentOptions.Width) > 1e-4f || requestedReset != currentOptions.CropTop)
                 {
                     currentOptions.Width = requestedWidth;
-                    currentOptions.Trim = requestedEye;
                     currentOptions.CropTop = requestedReset;
                     Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, currentOptions));
                 }

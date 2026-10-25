@@ -98,7 +98,6 @@ public:
     bool configure(const BridgeOptions& options) {
         if (assistant) {
             assistant->set_width(options.width);
-            assistant->set_eye(options.trim);
             assistant->set_reset_on_dashboard(options.crop_top != 0);
             overlay_check(vr::VROverlay()->SetOverlayWidthInMeters(handle, options.width));
             overlay_check(vr::VROverlay()->SetOverlayAlpha(handle, options.opacity));
@@ -461,7 +460,7 @@ private:
                 }
                 if (!current.preview) rendered.preview = 0;
                 if (!current.vr && !current.preview) continue;
-                bool crop_changed = current.crop_top != rendered.crop_top || current.trim != rendered.trim;
+                bool crop_changed = !assistant_request && (current.crop_top != rendered.crop_top || current.trim != rendered.trim);
                 bool preview_changed = current.preview && !rendered.preview;
                 bool preview_due = current.preview && (preview_serial != serial || preview_changed)
                     && now - last_preview >= std::chrono::milliseconds(100);
@@ -469,7 +468,12 @@ private:
                     && !crop_changed && !preview_due && !hidden)) continue;
                 auto processing_start = Clock::now();
                 stage = L"裁剪和绘制字幕图像";
-                auto texture = graphics.render(saved, surface_width, surface_height, current);
+                BridgeOptions render_options = current;
+                if (assistant_request) {
+                    render_options.crop_top = 0;
+                    render_options.trim = 0;
+                }
+                auto texture = graphics.render(saved, surface_width, surface_height, render_options);
                 if (!texture) continue;
                 stage = L"提交 SteamVR 字幕纹理";
                 if (overlay) overlay->submit(texture, graphics.context);
