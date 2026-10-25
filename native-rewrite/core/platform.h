@@ -8,14 +8,40 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <stop_token>
+#include "spatial_selection.h"
 
 struct BridgeCaptionButton;
+struct BridgeAssistantTarget;
 
 namespace platform {
 std::wstring error_text(std::wstring_view stage, HRESULT code, std::wstring_view details);
 void check_result(HRESULT code, std::wstring_view stage);
 bool caption_button(uintptr_t window, uint32_t process_id, BridgeCaptionButton& button);
 bool close_caption(const BridgeCaptionButton& button);
+BridgeAssistantTarget assistant_target(uintptr_t window, uint32_t process_id);
+void assistant_validate(const BridgeAssistantTarget& target);
+void copy_clipboard_image(uint32_t width, uint32_t height, std::span<const uint8_t> bgra);
+void assistant_paste(const BridgeAssistantTarget& target);
+struct AssistantMouseState;
+class AssistantMouse {
+public:
+    AssistantMouse(const BridgeAssistantTarget& target, bool activate);
+    ~AssistantMouse();
+    AssistantMouse(const AssistantMouse&) = delete;
+    AssistantMouse& operator=(const AssistantMouse&) = delete;
+    void update(const std::optional<std::array<float, 2>>& point, bool down, int wheel);
+    void release() noexcept;
+private:
+    std::unique_ptr<AssistantMouseState> state;
+};
+struct MirrorPixels {
+    uint32_t width = 0, height = 0;
+    std::vector<uint8_t> pixels;
+    spatial::Projection projection;
+};
+MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
+    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop);
 struct AudioDevice {
     std::wstring id;
     std::wstring name;
@@ -73,6 +99,7 @@ uint32_t submit_overlay(uint64_t handle, const winrt::com_ptr<ID3D11Texture2D>& 
 winrt::com_ptr<ID3DBlob> compile_shader(std::string_view source, std::string_view entry, std::string_view profile);
 winrt::com_ptr<ID3D11Texture2D> bgra_texture(const winrt::com_ptr<ID3D11Device>& device,
     uint32_t width, uint32_t height, std::span<const uint32_t> pixels);
+winrt::com_ptr<ID3D11Texture2D> prompt_texture(const winrt::com_ptr<ID3D11Device>& device, std::wstring_view text);
 void bind_compute(const winrt::com_ptr<ID3D11DeviceContext>& context,
     const winrt::com_ptr<ID3D11ShaderResourceView>& input,
     const winrt::com_ptr<ID3D11UnorderedAccessView>& target,

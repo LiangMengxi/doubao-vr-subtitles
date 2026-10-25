@@ -59,6 +59,36 @@ internal static class ShortcutService
         return Parse(setting.GetProperty("key").GetString() ?? "");
     }
 
+    private static ushort[] ReadAssistant()
+    {
+        try
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Doubao", "User Data", "Local State");
+            if (File.Exists(path))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                foreach (var name in new[] { "launcher", "quick_desk", "summon" })
+                {
+                    if (root.TryGetProperty("saman.shortcut." + name, out var setting)
+                        || (root.TryGetProperty("saman", out var saman) && saman.TryGetProperty("shortcut", out var shortcuts) && shortcuts.TryGetProperty(name, out setting)))
+                    {
+                        if (setting.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False) continue;
+                        var configured = setting.TryGetProperty("key", out var keyElement) ? keyElement.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(configured)) return Parse(configured);
+                    }
+                }
+            }
+        }
+        catch { }
+        return Parse("Alt+Space");
+    }
+
+    internal static CaptionWindow? FindAssistant(IReadOnlyList<CaptionWindow> windows, nint excludeHandle = 0, bool requireCompact = false) =>
+        windows.Where(window => window.Handle != excludeHandle && window.IsAssistantCandidate && (!requireCompact || window.AssistantScore >= 200))
+            .OrderByDescending(window => window.AssistantScore)
+            .FirstOrDefault();
+
     internal static string? RunningExecutable()
     {
         var processes = Process.GetProcessesByName("doubao");
@@ -125,6 +155,57 @@ internal static class ShortcutService
             await Task.Delay(200, cancellation);
         }
         throw new TimeoutException("未能唤起字幕，请确认豆包已登录且字幕快捷键有效。");
+    }
+
+    public static async Task<CaptionWindow> OpenAssistantAsync(nint excludeHandle, CancellationToken cancellation)
+    {
+        var existing = FindAssistant(WindowSource.Discover(true), excludeHandle, requireCompact: true);
+        if (existing != null) return existing;
+        var initialHandles = WindowSource.Discover(true).Select(window => window.Handle).ToHashSet();
+        var keys = ReadAssistant();
+        if (RunningExecutable() == null)
+        {
+            var executable = InstalledExecutable();
+            Process.Start(new ProcessStartInfo(executable)
+            {
+                Arguments = "--launch_from=auto_run --no-startup-window --auto_launch_delay_seconds=0",
+                WorkingDirectory = Path.GetDirectoryName(executable), UseShellExecute = false,
+                CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden
+            })?.Dispose();
+            await Task.Delay(4000, cancellation);
+        }
+        var startedAt = DateTime.UtcNow;
+        var deadline = startedAt.AddSeconds(12);
+        bool sent = false;
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var discovered = WindowSource.Discover(true);
+            var opened = discovered
+                .Where(window => window.Handle != excludeHandle && window.IsAssistantCandidate && (!initialHandles.Contains(window.Handle) || window.AssistantScore >= 200))
+                .OrderByDescending(window => !initialHandles.Contains(window.Handle))
+                .ThenByDescending(window => window.AssistantScore)
+                .FirstOrDefault();
+            if (opened != null) return opened;
+            if (sent && DateTime.UtcNow - startedAt > TimeSpan.FromSeconds(2.5))
+            {
+                var fallback = FindAssistant(discovered, excludeHandle, requireCompact: false);
+                if (fallback != null) return fallback;
+            }
+            if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
+            {
+                var events = keys.Select(key => Key(key, false)).Concat(keys.Reverse().Select(key => Key(key, true))).ToArray();
+                if (SendInput((uint)events.Length, events, Marshal.SizeOf<Input>()) != events.Length)
+                {
+                    var releases = keys.Reverse().Select(key => Key(key, true)).ToArray();
+                    SendInput((uint)releases.Length, releases, Marshal.SizeOf<Input>());
+                    throw new InvalidOperationException("无法发送浮窗快捷键，请确认豆包与本程序以相同权限运行。");
+                }
+                sent = true;
+            }
+            await Task.Delay(150, cancellation);
+        }
+        throw new TimeoutException("未能自动唤起豆包浮窗，请确认豆包已登录。");
     }
 
     private static Input Key(ushort key, bool release) => new()

@@ -65,15 +65,92 @@ internal sealed class PreviewBuffer : SafeBuffer
     }
 }
 
+internal sealed class TokenIntegrityBuffer : SafeBuffer
+{
+    internal const uint Capacity = 256;
+    public TokenIntegrityBuffer() : base(true)
+    {
+        SetHandle(Marshal.AllocHGlobal((int)Capacity));
+        Initialize(Capacity);
+    }
+    protected override bool ReleaseHandle() { Marshal.FreeHGlobal(handle); return true; }
+    internal uint? Integrity()
+    {
+        var identifier = new System.Security.Principal.SecurityIdentifier(Read<nint>(0)).Value;
+        const string prefix = "S-1-16-";
+        return identifier.StartsWith(prefix, StringComparison.Ordinal)
+            && uint.TryParse(identifier.AsSpan(prefix.Length), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out uint level) ? level : null;
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct AssistantTarget
+{
+    public uint Size, ProcessId;
+    public ulong Window, ProcessStarted;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct AssistantRequest
+{
+    public uint Size, ProcessId;
+    public ulong Window, ProcessStarted;
+    public uint ActivateOnClick, Border;
+    public float Width, Distance;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 4096)] public string Manifest;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct AssistantStatus
+{
+    public uint Size, State;
+    public ulong Sequence;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] public string Message;
+}
+
+internal sealed class AssistantImageBuffer : SafeBuffer
+{
+    internal const uint Capacity = 2048 * 1536 * 4;
+    internal const uint HeaderSize = 24;
+    internal const uint StructureSize = Capacity + HeaderSize;
+    public AssistantImageBuffer() : base(true)
+    {
+        SetHandle(Marshal.AllocHGlobal((int)StructureSize));
+        Initialize(StructureSize);
+        Write(0, StructureSize);
+    }
+    protected override bool ReleaseHandle() { Marshal.FreeHGlobal(handle); return true; }
+    public byte[] CopyTo(out uint width, out uint height, out ulong sequence)
+    {
+        width = Read<uint>(4); height = Read<uint>(8); sequence = Read<ulong>(16);
+        if (width is 0 or > 2048 || height is 0 or > 1536) throw new InvalidDataException("截图尺寸超出限制。");
+        var output = new byte[checked((int)(width * height * 4))];
+        ReadArray(HeaderSize, output, 0, output.Length);
+        return output;
+    }
+}
+
 internal static class NativeBridge
 {
     private const string Library = "DoubaoVR.Core.dll";
-    public const uint AbiVersion = 9;
+    public const uint AbiVersion = 10;
 
     public static void EnsureVersion()
     {
         if (Version() != AbiVersion) throw new InvalidOperationException("原生核心接口版本不匹配。");
     }
+
+    [DllImport(Library, EntryPoint = "bridge_assistant_target", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantTarget(ref AssistantTarget target, ref BridgeError error);
+    [DllImport(Library, EntryPoint = "bridge_assistant_paste", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantPaste(in AssistantTarget target, ref BridgeError error);
+    [DllImport(Library, EntryPoint = "bridge_assistant_start", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantStart(BridgeHandle bridge, in AssistantRequest request);
+    [DllImport(Library, EntryPoint = "bridge_assistant_status", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantStatus(BridgeHandle bridge, ref AssistantStatus status);
+    [DllImport(Library, EntryPoint = "bridge_assistant_image", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantImage(BridgeHandle bridge, ulong sequence, AssistantImageBuffer image);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, in int value, uint size);

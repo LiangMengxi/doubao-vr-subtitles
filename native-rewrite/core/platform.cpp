@@ -13,6 +13,9 @@
 #include "bridge.h"
 #include "caption_close.h"
 #include <filesystem>
+#include <dwmapi.h>
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "gdi32.lib")
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <winrt/Windows.Foundation.h>
@@ -89,6 +92,348 @@ std::wstring validated_audio_id(const AudioDefaults& defaults, std::wstring_view
 }
 
 namespace platform {
+BridgeAssistantTarget assistant_target(uintptr_t identifier, uint32_t process_id) {
+    const auto window = reinterpret_cast<HWND>(identifier);
+    DWORD owner = 0;
+    GetWindowThreadProcessId(window, &owner);
+    if (!IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || owner != process_id || process_id == 0) {
+        throw winrt::hresult_error(E_HANDLE, L"豆包浮窗已失效或最小化，请重新选择。");
+    }
+    winrt::handle process{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner)};
+    if (!process) winrt::throw_last_error();
+    std::wstring path(32768, L'\0');
+    DWORD length = static_cast<DWORD>(path.size());
+    if (!QueryFullProcessImageNameW(process.get(), 0, path.data(), &length)) winrt::throw_last_error();
+    path.resize(length);
+    if (_wcsicmp(std::filesystem::path(path).filename().c_str(), L"doubao.exe") != 0) {
+        throw winrt::hresult_access_denied(L"所选窗口不属于豆包。");
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(process.get(), &created, &exited, &kernel, &user)) winrt::throw_last_error();
+    return {sizeof(BridgeAssistantTarget), process_id, identifier, static_cast<uint64_t>(created.dwHighDateTime) << 32 | created.dwLowDateTime};
+}
+
+void assistant_validate(const BridgeAssistantTarget& target) {
+    if (target.size != sizeof(target) || target.process_started == 0 || target.window == 0) throw winrt::hresult_invalid_argument();
+    if (assistant_target(static_cast<uintptr_t>(target.window), target.process_id).process_started != target.process_started) {
+        throw winrt::hresult_error(E_HANDLE, L"豆包进程已经变化，请重新连接助手。");
+    }
+}
+
+void copy_clipboard_image(uint32_t width, uint32_t height, std::span<const uint8_t> bgra) {
+    const auto row_bytes = static_cast<size_t>(width) * 4;
+    if (width == 0 || height == 0 || width > 4096 || height > 4096 || bgra.size() != row_bytes * height) {
+        throw winrt::hresult_invalid_argument();
+    }
+    const auto total_bytes = sizeof(BITMAPINFOHEADER) + bgra.size();
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, total_bytes);
+    if (!memory) winrt::throw_last_error();
+    bool transferred = false;
+    ScopeExit release_memory([&] { if (!transferred) GlobalFree(memory); });
+    auto* locked = static_cast<uint8_t*>(GlobalLock(memory));
+    if (!locked) winrt::throw_last_error();
+    {
+        ScopeExit unlock([&] { GlobalUnlock(memory); });
+        BITMAPINFOHEADER header{};
+        header.biSize = sizeof(BITMAPINFOHEADER);
+        header.biWidth = static_cast<LONG>(width);
+        header.biHeight = static_cast<LONG>(height);
+        header.biPlanes = 1;
+        header.biBitCount = 32;
+        header.biCompression = BI_RGB;
+        header.biSizeImage = static_cast<DWORD>(bgra.size());
+        std::memcpy(locked, &header, sizeof(header));
+        auto* destination = locked + sizeof(header);
+        for (uint32_t row = 0; row < height; ++row) {
+            const auto source_row = height - 1 - row;
+            std::memcpy(destination + static_cast<size_t>(row) * row_bytes,
+                bgra.data() + static_cast<size_t>(source_row) * row_bytes, row_bytes);
+        }
+    }
+    bool opened = false;
+    for (int attempt = 0; attempt < 10 && !opened; ++attempt) {
+        if (OpenClipboard(nullptr)) opened = true;
+        else std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    if (!opened) throw winrt::hresult_error(E_ACCESSDENIED, L"无法打开系统剪贴板。");
+    ScopeExit close_clipboard([&] { CloseClipboard(); });
+    if (!EmptyClipboard()) winrt::throw_last_error();
+    if (!SetClipboardData(CF_DIB, memory)) winrt::throw_last_error();
+    transferred = true;
+}
+
+void assistant_paste(const BridgeAssistantTarget& target) {
+    assistant_validate(target);
+    for (const auto key : {VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN, static_cast<int>('V')}) {
+        if ((GetAsyncKeyState(key) & 0x8000) != 0) throw winrt::hresult_error(E_ABORT, L"请松开键盘修饰键后再添加截图。");
+    }
+    const auto window = reinterpret_cast<HWND>(target.window);
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+    const auto target_thread = GetWindowThreadProcessId(window, nullptr);
+    const auto current_thread = GetCurrentThreadId();
+    const auto foreground = GetForegroundWindow();
+    const auto foreground_thread = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    const bool attached_foreground = foreground_thread != 0 && foreground_thread != current_thread
+        && AttachThreadInput(current_thread, foreground_thread, TRUE) != FALSE;
+    const bool attached_target = target_thread != 0 && target_thread != current_thread
+        && target_thread != foreground_thread && AttachThreadInput(current_thread, target_thread, TRUE) != FALSE;
+    {
+        ScopeExit detach([&] {
+            if (attached_target) AttachThreadInput(current_thread, target_thread, FALSE);
+            if (attached_foreground) AttachThreadInput(current_thread, foreground_thread, FALSE);
+        });
+        BringWindowToTop(window);
+        SetForegroundWindow(window);
+        SetActiveWindow(window);
+        SetFocus(window);
+    }
+    const auto focus_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+    while (GetForegroundWindow() != window && std::chrono::steady_clock::now() < focus_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        SetForegroundWindow(window);
+    }
+    RECT client{};
+    if (GetClientRect(window, &client) && client.right > 80 && client.bottom > 120) {
+        const auto dpi = std::max(96u, GetDpiForWindow(window));
+        const auto offset_y = std::clamp<LONG>(static_cast<LONG>(64u * dpi / 96u), 42, (client.bottom - client.top) / 3);
+        POINT position{(client.right - client.left) / 2, (client.bottom - client.top) - offset_y};
+        HWND destination = window;
+        for (int depth = 0; depth < 8; ++depth) {
+            const auto child = ChildWindowFromPointEx(destination, position, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+            if (!child || child == destination) break;
+            DWORD owner = 0;
+            GetWindowThreadProcessId(child, &owner);
+            if (owner != target.process_id) break;
+            SetLastError(0);
+            if (!MapWindowPoints(destination, child, &position, 1) && GetLastError() != 0) break;
+            destination = child;
+        }
+        const auto packed = MAKELPARAM(static_cast<WORD>(position.x), static_cast<WORD>(position.y));
+        PostMessageW(destination, WM_MOUSEMOVE, 0, packed);
+        PostMessageW(destination, WM_LBUTTONDOWN, MK_LBUTTON, packed);
+        PostMessageW(destination, WM_LBUTTONUP, 0, packed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    }
+    GUITHREADINFO information{sizeof(GUITHREADINFO)};
+    const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (std::chrono::steady_clock::now() < ready_deadline) {
+        if (GetForegroundWindow() == window && GetGUIThreadInfo(target_thread, &information)
+            && information.hwndFocus && GetAncestor(information.hwndFocus, GA_ROOT) == window) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    if (GetForegroundWindow() != window) {
+        throw winrt::hresult_access_denied(L"无法激活豆包浮窗，请点击输入框后重试添加截图。");
+    }
+    for (const auto key : {VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN, static_cast<int>('V')}) {
+        if ((GetAsyncKeyState(key) & 0x8000) != 0) throw winrt::hresult_error(E_ABORT, L"请松开键盘修饰键后再添加截图。");
+    }
+    std::array<INPUT, 4> events{};
+    for (auto& event : events) event.type = INPUT_KEYBOARD;
+    events[0].ki.wVk = VK_CONTROL;
+    events[1].ki.wVk = 'V';
+    events[2].ki.wVk = 'V'; events[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    events[3].ki.wVk = VK_CONTROL; events[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    assistant_validate(target);
+    if (GetForegroundWindow() != window) throw winrt::hresult_error(E_ABORT, L"焦点已变化，已取消粘贴。");
+    const auto sent = SendInput(static_cast<UINT>(events.size()), events.data(), sizeof(INPUT));
+    if (sent != events.size()) {
+        std::array<INPUT, 2> releases{events[2], events[3]};
+        SendInput(static_cast<UINT>(releases.size()), releases.data(), sizeof(INPUT));
+        throw winrt::hresult_access_denied(L"粘贴被系统阻止，请确认豆包与本程序权限一致。");
+    }
+}
+
+struct AssistantMouseState {
+    BridgeAssistantTarget target;
+    bool activate = false;
+    HWND pressed = nullptr;
+    LPARAM position = 0;
+};
+
+AssistantMouse::AssistantMouse(const BridgeAssistantTarget& target, bool activate)
+    : state(std::make_unique<AssistantMouseState>()) { state->target = target; state->activate = activate; }
+AssistantMouse::~AssistantMouse() { release(); }
+void AssistantMouse::release() noexcept {
+    if (state->pressed) {
+        try {
+            assistant_validate(state->target);
+            DWORD owner = 0;
+            GetWindowThreadProcessId(state->pressed, &owner);
+            if (owner == state->target.process_id) PostMessageW(state->pressed, WM_LBUTTONUP, 0, state->position);
+        } catch (...) { }
+        state->pressed = nullptr;
+    }
+}
+void AssistantMouse::update(const std::optional<std::array<float, 2>>& point, bool down, int wheel) {
+    if (!point) { release(); return; }
+    assistant_validate(state->target);
+    const auto window = reinterpret_cast<HWND>(state->target.window);
+    RECT bounds{};
+    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds)))) {
+        if (!GetWindowRect(window, &bounds)) winrt::throw_last_error();
+    }
+    POINT screen{bounds.left + static_cast<LONG>((*point)[0] * static_cast<float>(bounds.right - bounds.left)),
+        bounds.top + static_cast<LONG>((*point)[1] * static_cast<float>(bounds.bottom - bounds.top))};
+    POINT position = screen;
+    if (!ScreenToClient(window, &position)) winrt::throw_last_error();
+    RECT client{};
+    if (!GetClientRect(window, &client) || !PtInRect(&client, position)) { release(); return; }
+    HWND destination = window;
+    for (int depth = 0; depth < 8; ++depth) {
+        const auto child = ChildWindowFromPointEx(destination, position, CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+        if (!child || child == destination) break;
+        DWORD owner = 0;
+        GetWindowThreadProcessId(child, &owner);
+        if (owner != state->target.process_id) break;
+        SetLastError(0);
+        if (!MapWindowPoints(destination, child, &position, 1) && GetLastError() != 0) break;
+        destination = child;
+    }
+    if (state->pressed && !down) release();
+    if (state->pressed && down) {
+        destination = state->pressed;
+        position = screen;
+        if (!ScreenToClient(destination, &position)) { release(); winrt::throw_last_error(); }
+    }
+    const auto packed = MAKELPARAM(static_cast<WORD>(position.x), static_cast<WORD>(position.y));
+    if (down && !state->pressed) {
+        if (state->activate && GetForegroundWindow() != window && !SetForegroundWindow(window)) {
+            throw winrt::hresult_access_denied(L"无法激活豆包，请在桌面点击浮窗后重试。");
+        }
+        if (!PostMessageW(destination, WM_LBUTTONDOWN, MK_LBUTTON, packed)) winrt::throw_last_error();
+        state->pressed = destination;
+    }
+    state->position = packed;
+    if (!PostMessageW(destination, WM_MOUSEMOVE, down ? MK_LBUTTON : 0, packed)) winrt::throw_last_error();
+    if (wheel != 0 && !PostMessageW(destination, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<SHORT>(wheel)),
+        MAKELPARAM(static_cast<WORD>(screen.x), static_cast<WORD>(screen.y)))) winrt::throw_last_error();
+}
+
+MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
+    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop) {
+    ID3D11ShaderResourceView* mirror = nullptr;
+    const auto result = vr::VRCompositor()->GetMirrorTextureD3D11(vr::Eye_Left, device.get(), reinterpret_cast<void**>(&mirror));
+    if (result != vr::VRCompositorError_None || !mirror) throw winrt::hresult_error(E_FAIL, L"无法取得 SteamVR 截图纹理。");
+    ScopeExit release([&] { vr::VRCompositor()->ReleaseMirrorTextureD3D11(mirror); });
+    D3D11_SHADER_RESOURCE_VIEW_DESC view_description{};
+    mirror->GetDesc(&view_description);
+    winrt::com_ptr<ID3D11Resource> resource;
+    mirror->GetResource(resource.put());
+    const auto source = resource.as<ID3D11Texture2D>();
+    D3D11_TEXTURE2D_DESC description{};
+    source->GetDesc(&description);
+    const auto is_rgba = [](DXGI_FORMAT candidate) {
+        return candidate == DXGI_FORMAT_R8G8B8A8_UNORM || candidate == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || candidate == DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    };
+    const auto is_bgra = [](DXGI_FORMAT candidate) {
+        return candidate == DXGI_FORMAT_B8G8R8A8_UNORM || candidate == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || candidate == DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    };
+    const auto is_r10g10b10a2 = [](DXGI_FORMAT candidate) {
+        return candidate == DXGI_FORMAT_R10G10B10A2_UNORM || candidate == DXGI_FORMAT_R10G10B10A2_TYPELESS;
+    };
+    const bool rgba = is_rgba(view_description.Format) || (!is_bgra(view_description.Format) && is_rgba(description.Format));
+    const bool bgra = is_bgra(view_description.Format) || (!rgba && is_bgra(description.Format));
+    const bool rgb10 = !rgba && !bgra && (is_r10g10b10a2(view_description.Format) || is_r10g10b10a2(description.Format));
+    if ((!rgba && !bgra && !rgb10) || description.Width == 0 || description.Height == 0 || description.Width > 8192 || description.Height > 8192
+        || static_cast<uint64_t>(description.Width) * description.Height > 8192ull * 8192ull || description.SampleDesc.Count != 1) {
+        const auto details = L"头显截图格式或尺寸不受支持（格式=" + std::to_wstring(static_cast<int>(description.Format))
+            + L"/" + std::to_wstring(static_cast<int>(view_description.Format)) + L"，尺寸="
+            + std::to_wstring(description.Width) + L"x" + std::to_wstring(description.Height)
+            + L"，采样=" + std::to_wstring(description.SampleDesc.Count) + L"）。";
+        throw winrt::hresult_error(E_NOTIMPL, details.c_str());
+    }
+    description.MipLevels = 1; description.ArraySize = 1;
+    description.Usage = D3D11_USAGE_STAGING; description.BindFlags = 0; description.MiscFlags = 0;
+    description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::com_ptr<ID3D11Texture2D> staging;
+    winrt::check_hresult(device->CreateTexture2D(&description, nullptr, staging.put()));
+    vr::Compositor_FrameTiming timing{};
+    timing.m_nSize = sizeof(timing);
+    const bool has_initial_timing = vr::VRCompositor()->GetFrameTiming(&timing);
+    auto index = timing.m_nFrameIndex;
+    uint32_t advances = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+    while (advances < 2 && std::chrono::steady_clock::now() < deadline && !stop.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        if (vr::VRCompositor()->GetFrameTiming(&timing) && (!has_initial_timing || timing.m_nFrameIndex != index)) {
+            index = timing.m_nFrameIndex;
+            ++advances;
+        }
+    }
+    if (stop.stop_requested()) throw winrt::hresult_error(E_ABORT);
+    vr::HmdMatrix34_t pose{};
+    bool pose_ready = vr::VRCompositor()->GetFrameTiming(&timing) && timing.m_HmdPose.bPoseIsValid;
+    if (pose_ready) pose = timing.m_HmdPose.mDeviceToAbsoluteTracking;
+    else {
+        std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> poses{};
+        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::VRCompositor()->GetTrackingSpace(), 0, poses.data(), static_cast<uint32_t>(poses.size()));
+        if (poses[vr::k_unTrackedDeviceIndex_Hmd].bPoseIsValid) {
+            pose = poses[vr::k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking;
+            pose_ready = true;
+        }
+    }
+    if (!pose_ready) throw winrt::hresult_error(E_FAIL, L"头显画面尚未就绪。");
+    context->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, source.get(), 0, nullptr);
+    D3D11_QUERY_DESC query_description{D3D11_QUERY_EVENT, 0};
+    winrt::com_ptr<ID3D11Query> query;
+    winrt::check_hresult(device->CreateQuery(&query_description, query.put()));
+    context->End(query.get()); context->Flush();
+    const auto gpu_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    BOOL ready = FALSE;
+    while (!ready && !stop.stop_requested()) {
+        winrt::check_hresult(context->GetData(query.get(), &ready, sizeof(ready), D3D11_ASYNC_GETDATA_DONOTFLUSH));
+        if (!ready && std::chrono::steady_clock::now() >= gpu_deadline) throw winrt::hresult_error(E_ABORT, L"截图读取超时。");
+        if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (stop.stop_requested()) throw winrt::hresult_error(E_ABORT);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    winrt::check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped));
+    ScopeExit unmap([&] { context->Unmap(staging.get(), 0); });
+    MirrorPixels output;
+    output.width = description.Width; output.height = description.Height;
+    if (mapped.RowPitch < output.width * 4) throw winrt::hresult_error(E_FAIL);
+    output.pixels.resize(static_cast<size_t>(output.width) * output.height * 4);
+    const std::span input{static_cast<const uint8_t*>(mapped.pData), static_cast<size_t>(mapped.RowPitch) * output.height};
+    for (uint32_t row = 0; row < output.height; ++row) {
+        for (uint32_t column = 0; column < output.width; ++column) {
+            const auto origin = static_cast<size_t>(row) * mapped.RowPitch + column * 4;
+            const auto destination = (static_cast<size_t>(row) * output.width + column) * 4;
+            if (rgb10) {
+                const uint32_t packed = static_cast<uint32_t>(input[origin]) | (static_cast<uint32_t>(input[origin + 1]) << 8)
+                    | (static_cast<uint32_t>(input[origin + 2]) << 16) | (static_cast<uint32_t>(input[origin + 3]) << 24);
+                output.pixels[destination] = static_cast<uint8_t>((((packed >> 20) & 0x3ffu) * 255u + 511u) / 1023u);
+                output.pixels[destination + 1] = static_cast<uint8_t>((((packed >> 10) & 0x3ffu) * 255u + 511u) / 1023u);
+                output.pixels[destination + 2] = static_cast<uint8_t>(((packed & 0x3ffu) * 255u + 511u) / 1023u);
+                output.pixels[destination + 3] = 255;
+            } else {
+                output.pixels[destination] = input[origin + (rgba ? 2 : 0)];
+                output.pixels[destination + 1] = input[origin + 1];
+                output.pixels[destination + 2] = input[origin + (rgba ? 0 : 2)];
+                output.pixels[destination + 3] = 255;
+            }
+        }
+    }
+    const auto eye = vr::VRSystem()->GetEyeToHeadTransform(vr::Eye_Left);
+    std::array<std::array<float, 4>, 3> world{};
+    for (size_t row = 0; row < 3; ++row) {
+        for (size_t column = 0; column < 4; ++column) {
+            world[row][column] = column == 3 ? pose.m[row][3] : 0;
+            for (size_t axis = 0; axis < 3; ++axis) world[row][column] += pose.m[row][axis] * eye.m[axis][column];
+        }
+    }
+    auto& projection = output.projection;
+    projection.eye = {world[0][3], world[1][3], world[2][3]};
+    projection.right = {world[0][0], world[1][0], world[2][0]};
+    projection.up = {world[0][1], world[1][1], world[2][1]};
+    projection.back = {world[0][2], world[1][2], world[2][2]};
+    float right = 0, bottom = 0;
+    vr::VRSystem()->GetProjectionRaw(vr::Eye_Left, &projection.left, &right, &projection.top, &bottom);
+    projection.width = right - projection.left; projection.height = bottom - projection.top;
+    return output;
+}
+
 namespace {
 struct CaptionIdentity {
     uint64_t started = 0;
@@ -483,6 +828,69 @@ winrt::com_ptr<ID3D11Texture2D> bgra_texture(const winrt::com_ptr<ID3D11Device>&
     winrt::com_ptr<ID3D11Texture2D> texture;
     winrt::check_hresult(device->CreateTexture2D(&desc, &data, texture.put()));
     return texture;
+}
+
+winrt::com_ptr<ID3D11Texture2D> prompt_texture(const winrt::com_ptr<ID3D11Device>& device, std::wstring_view text) {
+    constexpr uint32_t width = 512, height = 96;
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) winrt::throw_last_error();
+    ScopeExit delete_dc([&] { DeleteDC(dc); });
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = static_cast<LONG>(width);
+    info.bmiHeader.biHeight = -static_cast<LONG>(height);
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) winrt::throw_last_error();
+    ScopeExit delete_bitmap([&] { DeleteObject(bitmap); });
+    HFONT font = CreateFontW(-28, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+    if (!font) winrt::throw_last_error();
+    ScopeExit delete_font([&] { DeleteObject(font); });
+    const auto previous_bitmap = SelectObject(dc, bitmap);
+    const auto previous_font = SelectObject(dc, font);
+    ScopeExit restore_dc([&] { SelectObject(dc, previous_font); SelectObject(dc, previous_bitmap); });
+    std::memset(bits, 0, static_cast<size_t>(width) * height * 4);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT bounds{24, 12, static_cast<LONG>(width - 24), static_cast<LONG>(height - 12)};
+    std::wstring copy(text);
+    DrawTextW(dc, copy.data(), static_cast<int>(copy.size()), &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    GdiFlush();
+    const std::span source{static_cast<const uint8_t*>(bits), static_cast<size_t>(width) * height * 4};
+    std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
+    constexpr float left = 16.f, right = 496.f, top = 12.f, bottom = 84.f, radius = 20.f;
+    for (uint32_t row = 0; row < height; ++row) {
+        for (uint32_t column = 0; column < width; ++column) {
+            const float px = static_cast<float>(column) + .5f, py = static_cast<float>(row) + .5f;
+            const float cx = std::clamp(px, left + radius, right - radius);
+            const float cy = std::clamp(py, top + radius, bottom - radius);
+            const float dx = px - cx, dy = py - cy;
+            const float dist = std::sqrt(dx * dx + dy * dy) - radius;
+            const float pill_coverage = std::clamp(.6f - dist, 0.f, 1.f);
+            if (pill_coverage <= 0.f) continue;
+            const float border_weight = std::clamp(1.f - std::abs(dist + .9f) / 1.2f, 0.f, 1.f);
+            const size_t offset = (static_cast<size_t>(row) * width + column) * 4;
+            const float text_weight = static_cast<float>(std::max({source[offset], source[offset + 1], source[offset + 2]})) / 255.f;
+            float red = std::lerp(36.f, 255.f, border_weight);
+            float green = std::lerp(34.f, 182.f, border_weight);
+            float blue = std::lerp(40.f, 203.f, border_weight);
+            float alpha = std::lerp(224.f, 242.f, border_weight);
+            red = std::lerp(red, 255.f, text_weight);
+            green = std::lerp(green, 250.f, text_weight);
+            blue = std::lerp(blue, 252.f, text_weight);
+            alpha = std::lerp(alpha, 255.f, text_weight) * pill_coverage;
+            const auto out_a = static_cast<uint32_t>(std::lround(alpha));
+            const auto out_r = static_cast<uint32_t>(std::lround(red * pill_coverage));
+            const auto out_g = static_cast<uint32_t>(std::lround(green * pill_coverage));
+            const auto out_b = static_cast<uint32_t>(std::lround(blue * pill_coverage));
+            pixels[static_cast<size_t>(row) * width + column] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+        }
+    }
+    return bgra_texture(device, width, height, pixels);
 }
 
 void bind_compute(const winrt::com_ptr<ID3D11DeviceContext>& context,

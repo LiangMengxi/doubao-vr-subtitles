@@ -12,6 +12,7 @@ internal static class Program
     [STAThread]
     private static void Main(string[] arguments)
     {
+        if (AssistantHost.TryHandleCommand(arguments, out int assistantExitCode)) { Environment.ExitCode = assistantExitCode; return; }
         if (SteamVrStartupService.TryHandleCommand(arguments, out int commandExitCode)) { Environment.ExitCode = commandExitCode; return; }
         Log.Write("Starting WinUI desktop.");
         bool motionTest = false;

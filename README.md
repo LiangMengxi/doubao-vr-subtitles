@@ -1,20 +1,20 @@
 # 豆包VR字幕
 
-**创作者：凉梦曦** · **v0.3.3** · Windows 10 2004 / Windows 11 x64 · SteamVR
+**创作者：凉梦曦** · **v0.4.0** · Windows 10 2004 / Windows 11 x64 · SteamVR
 
-**v0.3.3** 增加曲面显示
+**v0.4.0** 新增功能：豆包VR助手
 
-“更多调节 → 曲面”可在平面与水平曲面之间调节，默认保持平面，支持滑块、加减按钮和常用档位。操作见 [使用说明](docs/USAGE.md)。
+“助手”页支持一键开启豆包对话浮窗 VR 显示、手柄射线点击与滚动、握把拖拽、浮窗大小调节，以及左摇杆进入／退出空间截图模式、双手扳机细淡粉色框选并自动将截图放入豆包发送框。操作见 [使用说明](docs/USAGE.md)。
 
-将豆包桌面版的实时字幕窗口捕获到 SteamVR 悬浮层。豆包负责识别和翻译，本程序转发字幕画面，不上传字幕、不修改豆包或游戏。默认不读取麦克风；明确开启可选的 PICO 延迟改善后，仅消费并丢弃匹配设备的音频包，不保存、不上传。独立的非官方项目。
+将豆包桌面版的实时字幕窗口与对话浮窗捕获到 SteamVR 悬浮层。豆包负责识别、对话和翻译，本程序转发画面与空间截图附件，不上传字幕、不修改豆包或游戏。默认不读取麦克风；明确开启可选的 PICO 延迟改善后，仅消费并丢弃匹配设备的音频包，不保存、不上传。独立的非官方项目。
 
 ## 下载与安装
 
-在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.3.3) 下载：
+在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.4.0) 下载：
 
-- `DoubaoVR-v0.3.3-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
-- `DoubaoVR-v0.3.3-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
-- `DoubaoVR-v0.3.3-source.zip`：对应版本的完整公开源码及构建资料。
+- `DoubaoVR-v0.4.0-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
+- `DoubaoVR-v0.4.0-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
+- `DoubaoVR-v0.4.0-source.zip`：对应版本的完整公开源码及构建资料。
 - 三个包均提供 `.sha256` 校验文件。
 
 下载版已包含 .NET 与 WinUI 运行文件，不需要安装 Python、.NET SDK 或额外依赖管理器。需要另外安装并登录豆包桌面版；VR 显示需要 SteamVR 和头显，VRChat 不是必需依赖。
@@ -23,8 +23,8 @@
 
 1. 在豆包设置实时字幕快捷键，并确认能正常显示字幕。
 2. 启动 SteamVR，打开“豆包VR字幕”。
-3. 点击“开启字幕”，确认预览正确，再点击“开启VR”。
-4. “字幕”页调节大小与距离；“更多调节”页调节位置、双轴倾斜、不透明度和曲面；“设置”页调节捕获、裁剪、主题及退出行为。
+3. 点击“开启字幕”或“开启VR”（未打开字幕或对话浮窗时会自动唤起并连接）。
+4. “字幕”页调节大小与距离；“更多调节”页调节位置、双轴倾斜、不透明度和曲面；“助手”页开启豆包对话浮窗 VR 交互、调节浮窗大小并使用空间截图；“设置”页调节捕获、裁剪、主题及退出行为。
 
 开启“关闭时自动最小化”后，右上角叉号只最小化到任务栏，VR 字幕继续显示；底部“退出”始终真正退出。“退出时同时关闭豆包”只影响底部退出按钮，默认关闭。重复启动程序可恢复已运行窗口。
 
@@ -83,6 +83,14 @@ Copyright (C) 2026 凉梦曦。本项目原创程序代码、构建脚本及原�
 - 项目仓库：[https://github.com/Kill11/PicoStreamingMicrophoneKeeper](https://github.com/Kill11/PicoStreamingMicrophoneKeeper)
 
 感谢原作者公开处理思路。本项目仅借鉴持续消费 PICO 麦克风音频包的功能思路，根据 Windows WASAPI 文档独立实现，未复制参考项目的代码或资源。详细说明见 [参考说明](docs/REFERENCES.md)。
+
+### 空间截图交互借鉴声明
+
+- 原作者：[AIRsLight](https://github.com/AIRsLight)
+- 参考项目：**SteamVRTranslator**
+- 项目仓库：[https://github.com/AIRsLight/SteamVRTranslator](https://github.com/AIRsLight/SteamVRTranslator)
+
+豆包VR助手借鉴其“短按左摇杆进入／退出截图模式、双扳机配合双手位置框选、松开任意扳机截图”的交互思路，以现有 C++20／WinUI 3 工程独立实现；没有复制该项目的源码、资源或二进制，也未引入其 API 上传、翻译、语音或模型模块。截图自动放入豆包对话浮窗发送框，细节见[使用说明](docs/USAGE.md#v040-豆包vr助手)。
 
 分发安装包或 ZIP 时，应同时提供与该二进制对应的完整源码及构建说明，而非只指向可能已变化的最新主分支。
 

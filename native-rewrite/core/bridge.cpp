@@ -4,6 +4,7 @@
 #include "overlay_transform.h"
 #include "overlay_curvature.h"
 #include "microphone_keeper.h"
+#include "assistant.h"
 #include <windows.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -22,6 +23,7 @@
 #include <string>
 #include <unordered_map>
 #include <limits>
+#include <filesystem>
 
 using namespace winrt;
 using namespace winrt::Windows::Graphics;
@@ -56,7 +58,8 @@ void overlay_check(vr::EVROverlayError error) {
 
 class Overlay {
 public:
-    Overlay() : runtime_lock(openvr_mutex, std::try_to_lock) {
+    Overlay(const std::optional<BridgeAssistantRequest>& request, const std::shared_ptr<AssistantMailbox>& mailbox)
+        : runtime_lock(openvr_mutex, std::try_to_lock) {
         if (!runtime_lock.owns_lock()) throw hresult_error(E_UNEXPECTED, L"已有 VR 悬浮连接，请先关闭原连接。");
         vr::EVRInitError error = vr::VRInitError_None;
         vr::VR_Init(&error, vr::VRApplication_Overlay);
@@ -64,9 +67,12 @@ public:
             throw hresult_error(E_FAIL, L"无法连接 SteamVR：" + to_hstring(vr::VR_GetVRInitErrorAsEnglishDescription(error)));
         }
         initialized = true;
+        if (request) mailbox->update(1, L"SteamVR 已连接，正在创建悬浮层…");
         try {
-            overlay_check(vr::VROverlay()->CreateOverlay("local.doubao.subtitle.bridge.native", "Doubao VR Native", &handle));
+            overlay_check(vr::VROverlay()->CreateOverlay(request ? "local.doubao.assistant.native" : "local.doubao.subtitle.bridge.native",
+                request ? "Doubao VR Assistant" : "Doubao VR Native", &handle));
             overlay_check(vr::VROverlay()->SetOverlayInputMethod(handle, vr::VROverlayInputMethod_None));
+            if (request) assistant = std::make_unique<AssistantInteraction>(handle, *request, mailbox);
         } catch (...) {
             close();
             throw;
@@ -79,6 +85,12 @@ public:
         return adapter_index;
     }
     bool configure(const BridgeOptions& options) {
+        if (assistant) {
+            assistant->set_width(options.width);
+            overlay_check(vr::VROverlay()->SetOverlayWidthInMeters(handle, options.width));
+            overlay_check(vr::VROverlay()->SetOverlayAlpha(handle, options.opacity));
+            return false;
+        }
         const auto matrix = overlay_transform(options);
         vr::HmdMatrix34_t transform{};
         for (size_t row = 0; row < matrix.size(); ++row) {
@@ -108,7 +120,15 @@ public:
     }
     const OverlayCurvature& curvature() const noexcept { return curved; }
     void submit(const com_ptr<ID3D11Texture2D>& texture, const com_ptr<ID3D11DeviceContext>& context) {
+        std::unique_lock visibility_lock(visibility, std::defer_lock);
+        if (assistant) {
+            visibility_lock = std::unique_lock(assistant->visibility);
+            D3D11_TEXTURE2D_DESC description{};
+            texture->GetDesc(&description);
+            assistant->dimensions(description.Width, description.Height);
+        }
         overlay_check(static_cast<vr::EVROverlayError>(platform::submit_overlay(handle, texture, context)));
+        if (assistant && assistant->suppressed()) return;
         overlay_check(vr::VROverlay()->ShowOverlay(handle));
     }
     void hide() { overlay_check(vr::VROverlay()->HideOverlay(handle)); }
@@ -125,20 +145,20 @@ public:
     }
 private:
     void close() noexcept {
+        assistant.reset();
         if (handle != vr::k_ulOverlayHandleInvalid) {
             vr::VROverlay()->HideOverlay(handle);
             vr::VROverlay()->ClearOverlayTexture(handle);
             vr::VROverlay()->DestroyOverlay(handle);
             handle = vr::k_ulOverlayHandleInvalid;
         }
-        if (initialized) {
-            vr::VR_Shutdown();
-            initialized = false;
-        }
+        if (initialized) { vr::VR_Shutdown(); initialized = false; }
     }
     bool initialized = false;
     std::unique_lock<std::mutex> runtime_lock;
+    std::mutex visibility;
     vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
+    std::unique_ptr<AssistantInteraction> assistant;
     OverlayCurvature curved;
 };
 
@@ -160,7 +180,7 @@ class Bridge : public std::enable_shared_from_this<Bridge> {
 public:
     Bridge() : signal(std::make_shared<Signal>()) {}
     ~Bridge() { stop(); }
-    int start(HWND window, const BridgeOptions& requested) {
+    int start(HWND window, const BridgeOptions& requested, std::optional<BridgeAssistantRequest> assistant_request = {}) {
         std::lock_guard control_guard(control);
         if (disposed) return E_HANDLE;
         if (!valid(requested)) return reject_start(L"捕获参数无效或接口结构不匹配。");
@@ -176,7 +196,13 @@ public:
             preview = {};
         }
         stopping = false;
-        worker = std::jthread([self = shared_from_this(), window, process_id] { self->run(window, process_id); });
+        {
+            std::lock_guard lock(assistant_mailbox->mutex);
+            assistant_mailbox->state = 0;
+            assistant_mailbox->message.clear();
+            assistant_mailbox->pixels.clear();
+        }
+        worker = std::jthread([self = shared_from_this(), window, process_id, assistant_request] { self->run(window, process_id, assistant_request); });
         return S_OK;
     }
     void stop() {
@@ -229,6 +255,7 @@ public:
     std::wstring error;
     PixelPreview preview;
     uint64_t preview_sequence = 0;
+    std::shared_ptr<AssistantMailbox> assistant_mailbox = std::make_shared<AssistantMailbox>();
 private:
     int reject_start(std::wstring_view details) {
         std::lock_guard lock(mutex);
@@ -244,12 +271,16 @@ private:
         stats.curvature_fallback = 0;
         stats.curvature_degrees = 0;
         preview = {};
+        std::lock_guard assistant_lock(assistant_mailbox->mutex);
+        assistant_mailbox->state = 0;
+        assistant_mailbox->message.clear();
+        std::vector<uint8_t>().swap(assistant_mailbox->pixels);
     }
-    void run(HWND window, DWORD process_id) noexcept {
+    void run(HWND window, DWORD process_id, const std::optional<BridgeAssistantRequest>& assistant_request) noexcept {
         std::wstring_view stage = L"初始化捕获线程";
         try {
             platform::ApartmentScope apartment;
-            capture(window, process_id, stage);
+            capture(window, process_id, stage, assistant_request);
         } catch (const hresult_error& exception) {
             fail(platform::error_text(stage, exception.code(), std::wstring(exception.message())));
         } catch (const std::exception& exception) {
@@ -258,13 +289,14 @@ private:
             fail(L"原生捕获发生未知错误。");
         }
     }
-    void capture(HWND window, DWORD process_id, std::wstring_view& stage) {
+    void capture(HWND window, DWORD process_id, std::wstring_view& stage, const std::optional<BridgeAssistantRequest>& assistant_request) {
         stage = L"检查 Windows 窗口捕获支持";
         if (!GraphicsCaptureSession::IsSupported()) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
         auto current = configuration();
         std::unique_ptr<Graphics> graphics_storage;
         stage = L"连接 SteamVR";
-        auto overlay = current.vr ? std::make_unique<Overlay>() : nullptr;
+        if (assistant_request) assistant_mailbox->update(1, L"正在连接 SteamVR…");
+        auto overlay = current.vr ? std::make_unique<Overlay>(assistant_request, assistant_mailbox) : nullptr;
         stage = L"初始化 Direct3D 图形资源";
         graphics_storage = std::make_unique<Graphics>(overlay ? overlay->adapter() : 0,
             [&overlay] { if (overlay) overlay->clear_texture(); });
@@ -326,6 +358,10 @@ private:
                 stage = L"检查字幕窗口和 VR 连接状态";
                 WaitForSingleObject(signal->value.get(), 50);
                 if (stopping) break;
+                if (assistant_request) {
+                    std::lock_guard lock(assistant_mailbox->mutex);
+                    if (assistant_mailbox->state == 6) throw hresult_error(E_FAIL, hstring(assistant_mailbox->message));
+                }
                 DWORD owner = 0;
                 GetWindowThreadProcessId(window, &owner);
                 if (*closed || !IsWindow(window) || owner != process_id || !IsWindowVisible(window)) {
@@ -487,7 +523,59 @@ Registry& registry() {
 }
 }
 
-uint32_t __cdecl bridge_version() noexcept { return 9; }
+uint32_t __cdecl bridge_version() noexcept { return 10; }
+
+int32_t __cdecl bridge_assistant_start(BridgeId bridge, const BridgeAssistantRequest& request) noexcept {
+    auto instance = registry().acquire(bridge);
+    if (!instance) return E_HANDLE;
+    try {
+        if (request.size != sizeof(request) || request.border > 1 || request.activate_on_click > 1
+            || !std::isfinite(request.width) || request.width < .3f || request.width > 1.5f
+            || !std::isfinite(request.distance) || request.distance < .4f || request.distance > 3.f
+            || request.manifest.front() == 0 || request.manifest.back() != 0) return E_INVALIDARG;
+        platform::assistant_validate({sizeof(BridgeAssistantTarget), request.process_id, request.window, request.process_started});
+        const std::filesystem::path manifest(request.manifest.data());
+        if (!manifest.is_absolute() || !std::filesystem::is_regular_file(manifest)) throw hresult_invalid_argument(L"找不到助手手柄动作清单。");
+        BridgeOptions options{sizeof(BridgeOptions), request.width, request.distance, 0, 0, 1, 0, 0, 0, 0, request.border, 1, 1, 0};
+        return instance->start(reinterpret_cast<HWND>(request.window), options, request);
+    } catch (const hresult_error& exception) {
+        instance->fail(std::wstring(exception.message()));
+        return exception.code();
+    } catch (...) { instance->fail(L"助手连接失败。"); return E_FAIL; }
+}
+
+int32_t __cdecl bridge_assistant_status(BridgeId bridge, BridgeAssistantStatus& output) noexcept {
+    try {
+        if (output.size != sizeof(output)) return E_INVALIDARG;
+        auto instance = registry().acquire(bridge);
+        if (!instance) return E_HANDLE;
+        const auto& mailbox = instance->assistant_mailbox;
+        std::lock_guard lock(mailbox->mutex);
+        output.state = mailbox->state;
+        output.sequence = mailbox->sequence;
+        output.message.fill(0);
+        std::copy_n(mailbox->message.begin(), std::min(mailbox->message.size(), output.message.size() - 1), output.message.begin());
+        return S_OK;
+    } catch (...) { return E_FAIL; }
+}
+
+int32_t __cdecl bridge_assistant_image(BridgeId bridge, uint64_t sequence, BridgeAssistantImage& output) noexcept {
+    try {
+        if (output.size != sizeof(output)) return E_INVALIDARG;
+        auto instance = registry().acquire(bridge);
+        if (!instance) return E_HANDLE;
+        const auto& mailbox = instance->assistant_mailbox;
+        std::lock_guard lock(mailbox->mutex);
+        if (mailbox->sequence != sequence || mailbox->pixels.empty()) return S_FALSE;
+        if (mailbox->pixels.size() > output.pixels.size()) return E_BOUNDS;
+        output.width = mailbox->width;
+        output.height = mailbox->height;
+        output.sequence = mailbox->sequence;
+        std::copy(mailbox->pixels.begin(), mailbox->pixels.end(), output.pixels.begin());
+        std::vector<uint8_t>().swap(mailbox->pixels);
+        return S_OK;
+    } catch (...) { return E_FAIL; }
+}
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }

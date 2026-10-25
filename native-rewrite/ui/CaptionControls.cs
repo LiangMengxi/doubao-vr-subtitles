@@ -18,16 +18,17 @@ internal sealed partial class MainWindow
         captureButton.IsEnabled = vrButton.IsEnabled = !captions.IsBusy && !captureChanging && !shuttingDown;
     }
 
-    private async Task ToggleCaptionAsync()
+    private async Task ToggleCaptionAsync(bool? requestVr = null)
     {
         if (captions.IsBusy || shuttingDown) return;
-        status.Text = captions.Target == null ? "正在开启字幕…" : "正在关闭字幕…";
+        bool targetVr = requestVr ?? vrEnabled;
+        status.Text = captions.Target == null ? (targetVr ? "正在一键开启字幕与VR…" : "正在开启字幕…") : "正在关闭字幕…";
         var operation = captions.ToggleAsync(async window =>
         {
             if (shuttingDown) return;
             UpdateCaptionControls();
             RefreshSources(window.Handle);
-            await StartAsync(vrEnabled);
+            await StartAsync(targetVr);
         }, async () =>
         {
             reconnecting = false;

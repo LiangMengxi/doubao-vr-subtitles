@@ -26,6 +26,7 @@ internal sealed partial class MainWindow : Window
     private readonly TextBlock placeholder = new() { Text = "暂无字幕", Opacity = .5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button vrButton = new() { Content = "开启VR", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Button captureButton = new() { Content = "连接预览", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
+    private readonly ToggleSwitch borderToggle = new() { Header = "显示捕获黄框" };
     private readonly byte[] previewBuffer = new byte[640 * 240 * 4];
     private readonly PreviewBuffer nativePreview = new();
     private BridgeHandle? bridge;
@@ -86,6 +87,7 @@ internal sealed partial class MainWindow : Window
         ApplyBackground();
         _ = RefreshAudioAsync();
         _ = InitializeMicrophoneAsync();
+        InitializeAssistant();
     }
 
     private static TextBlock Heading(string text, double size = 18) => new() { Text = text, FontSize = size, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
@@ -116,7 +118,16 @@ internal sealed partial class MainWindow : Window
         };
         vrButton.Click += async (_, _) =>
         {
-            try { await StartAsync(!vrEnabled); }
+            try
+            {
+                if (!vrEnabled) RefreshSources();
+                if (!vrEnabled && (sources.SelectedItem is not CaptionWindow source || !WindowSource.Same(source) || !source.IsCaption))
+                {
+                    await ToggleCaptionAsync(true);
+                    return;
+                }
+                await StartAsync(!vrEnabled);
+            }
             catch (Exception exception) { Report(exception); }
         };
         AddCell(actions, launchButton, 0);
@@ -187,25 +198,19 @@ internal sealed partial class MainWindow : Window
         theme.SelectionChanged += (_, _) => { settings.Appearance = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system"; ApplyTheme(); ApplyConfiguration(); };
         appearance.Children.Add(theme);
         appearance.Children.Add(ColorSettings());
-        var border = new ToggleSwitch { Header = "显示捕获黄框", IsOn = settings.Border };
-        border.Toggled += async (_, _) =>
-        {
-            settings.Border = border.IsOn;
-            ApplyConfiguration();
-            try { if (running) await StartAsync(vrEnabled); }
-            catch (Exception exception) { Report(exception); }
-        };
-        sourceCard.Children.Add(border);
+        borderToggle.IsOn = settings.Border;
+        borderToggle.Toggled += async (_, _) => await UpdateCaptureBorderAsync(borderToggle.IsOn);
+        sourceCard.Children.Add(borderToggle);
         appearance.Children.Add(BackgroundSettings());
         preferences.Children.Add(SettingsSection("主题与背景", appearance));
         preferences.Children.Add(SettingsSection("字幕捕获", sourceCard));
         preferences.Children.Add(SettingsSection("程序设置", behavior));
         preferences.Children.Add(SettingsSection("关于", AboutSettings()));
         var pageHost = new Grid();
-        var navigation = EqualColumns(3);
+        var navigation = EqualColumns(4);
         var pageButtons = new List<ToggleButton>();
         var pages = new List<ScrollViewer>();
-        var entries = new[] { ("字幕", home), ("更多调节", advanced), ("设置", preferences) };
+        var entries = new[] { ("字幕", home), ("更多调节", advanced), ("助手", AssistantPage()), ("设置", preferences) };
         showPage = currentIndex =>
         {
             selectedPage = currentIndex;
@@ -475,11 +480,13 @@ internal sealed partial class MainWindow : Window
         Log.Write("Shutdown requested; releasing native core.");
         lifetime.Cancel();
         timer.Stop();
+        assistantTimer?.Stop();
         root.IsHitTestVisible = false;
         status.Text = "正在移除 VR 悬浮并退出…";
         try
         {
             await preferences.StopAsync();
+            await StopAssistantAsync(true);
             await operations.WaitAsync();
             try { if (bridge != null) await Task.Run(() => bridge.Dispose()); }
             finally { operations.Release(); }

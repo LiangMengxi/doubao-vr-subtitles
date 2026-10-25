@@ -34,6 +34,9 @@ internal sealed class Settings
     [JsonPropertyName("microphone_target_name")] public string MicrophoneTargetName { get; set; } = "";
     [JsonPropertyName("pico_microphone_keeper")] public bool PicoMicrophoneKeeper { get; set; }
     [JsonPropertyName("steamvr_auto_start")] public bool SteamVrAutoStart { get; set; }
+    [JsonPropertyName("assistant_activate_on_click"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool AssistantActivateOnClick { get; set; }
+    [JsonPropertyName("assistant_auto_attach")] public bool AssistantAutoAttach { get; set; } = true;
+    [JsonPropertyName("assistant_width")] public float AssistantWidth { get; set; } = .7f;
 
     public static Settings Load()
     {
@@ -67,6 +70,7 @@ internal sealed class Settings
         Yaw = Limit(Yaw, -45, 45, 0);
         CurvatureDegrees = Limit(CurvatureDegrees, 0, 90, 0);
         CropTop = Limit(CropTop, 0, 120, 0);
+        AssistantWidth = Limit(AssistantWidth, .3f, 1.5f, .7f);
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
         AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
         if (!BackgroundFiles.IsOwnedName(BackgroundImage)) BackgroundImage = "";

@@ -1,0 +1,78 @@
+{
+  "action_sets": [
+    {
+      "name": "/actions/assistant",
+      "usage": "leftright"
+    }
+  ],
+  "actions": [
+    {
+      "name": "/actions/assistant/in/capture",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/assistant/in/left_trigger",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/assistant/in/right_trigger",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/assistant/in/left_grip",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/assistant/in/right_grip",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/assistant/in/scroll",
+      "type": "vector2",
+      "requirement": "optional"
+    }
+  ],
+  "default_bindings": [
+    {
+      "controller_type": "oculus_touch",
+      "binding_url": "bindings_oculus_touch.json"
+    },
+    {
+      "controller_type": "knuckles",
+      "binding_url": "bindings_knuckles.json"
+    },
+    {
+      "controller_type": "holographic_controller",
+      "binding_url": "bindings_holographic_controller.json"
+    },
+    {
+      "controller_type": "pico_controller",
+      "binding_url": "bindings_pico_controller.json"
+    },
+    {
+      "controller_type": "pico4_controller",
+      "binding_url": "bindings_pico4_controller.json"
+    },
+    {
+      "controller_type": "generic",
+      "binding_url": "bindings_generic.json"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "zh_cn",
+      "/actions/assistant": "豆包助手",
+      "/actions/assistant/in/capture": "截图模式／取消",
+      "/actions/assistant/in/left_trigger": "左手框选／点击",
+      "/actions/assistant/in/right_trigger": "右手框选／点击",
+      "/actions/assistant/in/left_grip": "左手抓取",
+      "/actions/assistant/in/right_grip": "右手抓取",
+      "/actions/assistant/in/scroll": "滚动对话"
+    }
+  ]
+}

@@ -56,6 +56,39 @@ struct BridgeError {
     std::array<wchar_t, 2048> text{};
 };
 
+struct BridgeAssistantTarget {
+    uint32_t size = sizeof(BridgeAssistantTarget);
+    uint32_t process_id = 0;
+    uint64_t window = 0;
+    uint64_t process_started = 0;
+};
+struct BridgeAssistantRequest {
+    uint32_t size = sizeof(BridgeAssistantRequest);
+    uint32_t process_id = 0;
+    uint64_t window = 0;
+    uint64_t process_started = 0;
+    uint32_t activate_on_click = 0;
+    uint32_t border = 0;
+    float width = .7f;
+    float distance = 1.f;
+    std::array<wchar_t, 4096> manifest{};
+};
+struct BridgeAssistantStatus {
+    uint32_t size = sizeof(BridgeAssistantStatus);
+    uint32_t state = 0;
+    uint64_t sequence = 0;
+    std::array<wchar_t, 512> message{};
+};
+inline constexpr uint32_t bridge_assistant_image_capacity = 2048 * 1536 * 4;
+struct BridgeAssistantImage {
+    uint32_t size = sizeof(BridgeAssistantImage);
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t reserved = 0;
+    uint64_t sequence = 0;
+    std::array<uint8_t, bridge_assistant_image_capacity> pixels{};
+};
+
 struct BridgeCaptionButton {
     uint32_t size = sizeof(BridgeCaptionButton);
     uint32_t process_id = 0;
@@ -118,12 +151,21 @@ struct BridgeSteamVrState {
 };
 
 static_assert(sizeof(BridgeOptions) == 56 && offsetof(BridgeOptions, curvature_degrees) == 52);
+static_assert(sizeof(BridgeAssistantTarget) == 24);
+static_assert(sizeof(BridgeAssistantRequest) == 8232 && offsetof(BridgeAssistantRequest, manifest) == 40);
+static_assert(sizeof(BridgeAssistantStatus) == 1040 && offsetof(BridgeAssistantStatus, message) == 16);
+static_assert(sizeof(BridgeAssistantImage) == bridge_assistant_image_capacity + 24 && offsetof(BridgeAssistantImage, pixels) == 24);
 static_assert(sizeof(BridgeStats) == 48 && offsetof(BridgeStats, curvature_fallback) == 40);
 static_assert(sizeof(BridgePreview) == 614424 && offsetof(BridgePreview, pixels) == 24);
 static_assert(sizeof(BridgeSteamVrRegistration) == 8208 && offsetof(BridgeSteamVrRegistration, manifest) == 16);
 static_assert(sizeof(BridgeSteamVrState) == 10256 && offsetof(BridgeSteamVrState, executable) == 16);
 
 extern "C" {
+BRIDGE_API int32_t __cdecl bridge_assistant_target(BridgeAssistantTarget& target, BridgeError& error) noexcept;
+BRIDGE_API int32_t __cdecl bridge_assistant_paste(const BridgeAssistantTarget& target, BridgeError& error) noexcept;
+BRIDGE_API int32_t __cdecl bridge_assistant_start(BridgeId bridge, const BridgeAssistantRequest& request) noexcept;
+BRIDGE_API int32_t __cdecl bridge_assistant_status(BridgeId bridge, BridgeAssistantStatus& status) noexcept;
+BRIDGE_API int32_t __cdecl bridge_assistant_image(BridgeId bridge, uint64_t sequence, BridgeAssistantImage& image) noexcept;
 BRIDGE_API int32_t __cdecl bridge_caption_button(uintptr_t window, uint32_t process_id, BridgeCaptionButton& button, BridgeError& error) noexcept;
 BRIDGE_API int32_t __cdecl bridge_caption_close(const BridgeCaptionButton& button, BridgeError& error) noexcept;
 BRIDGE_API int32_t __cdecl bridge_audio_devices(uint32_t flow, BridgeAudioDevices& devices, BridgeError& error) noexcept;

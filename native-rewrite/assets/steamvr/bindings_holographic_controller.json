@@ -1,0 +1,65 @@
+{
+  "controller_type": "holographic_controller",
+  "name": "豆包助手",
+  "description": "左摇杆按压截图；双扳机框选；扳机点击；握持抓取；右摇杆滚动。",
+  "bindings": {
+    "/actions/assistant": {
+      "sources": [
+        {
+          "path": "/user/hand/left/input/joystick",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/assistant/in/capture"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/trigger",
+          "mode": "trigger",
+          "inputs": {
+            "click": {
+              "output": "/actions/assistant/in/left_trigger"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/grip",
+          "mode": "trigger",
+          "inputs": {
+            "click": {
+              "output": "/actions/assistant/in/left_grip"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/right/input/trigger",
+          "mode": "trigger",
+          "inputs": {
+            "click": {
+              "output": "/actions/assistant/in/right_trigger"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/right/input/grip",
+          "mode": "trigger",
+          "inputs": {
+            "click": {
+              "output": "/actions/assistant/in/right_grip"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/right/input/joystick",
+          "mode": "joystick",
+          "inputs": {
+            "position": {
+              "output": "/actions/assistant/in/scroll"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

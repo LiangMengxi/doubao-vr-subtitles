@@ -7,12 +7,25 @@ namespace DoubaoVR.Desktop;
 internal sealed record CaptionWindow(nint Handle, uint ProcessId, string Title, string ClassName,
     int Width, int Height, long Style)
 {
-    public bool IsCaption => Title.Length == 0 && ClassName == "Chrome_WidgetWin_1" && (Style & 0x80) != 0 && Score >= 150;
+    public bool IsCaption => !WindowSource.IsAssistant(Handle) && Title.Length == 0 && ClassName == "Chrome_WidgetWin_1" && (Style & 0x80) != 0 && Score >= 150;
+    public bool IsAssistantCandidate => !IsCaption && ClassName == "Chrome_WidgetWin_1" && AssistantScore >= 100;
+
+    public int AssistantScore
+    {
+        get
+        {
+            if (IsCaption) return -1000;
+            if (ClassName != "Chrome_WidgetWin_1" || Width < 240 || Height < 280) return -500;
+            bool compactFloating = Width is >= 280 and <= 960 && Height is >= 360 and <= 1250 && Width <= Height * 1.25;
+            return compactFloating ? 220 : 100;
+        }
+    }
 
     public int Score
     {
         get
         {
+            if (WindowSource.IsAssistant(Handle)) return -1000;
             var ratio = Width / (double)Math.Max(1, Height);
             bool expanded = Title.Length == 0 && ClassName == "Chrome_WidgetWin_1" && (Style & 0x80) != 0
                 && Width >= 600 && ratio >= .7 && ratio <= 2.5;
@@ -25,6 +38,16 @@ internal sealed record CaptionWindow(nint Handle, uint ProcessId, string Title, 
 
 internal static class WindowSource
 {
+    private sealed record AssistantIdentity(nint Handle, uint ProcessId);
+    private static AssistantIdentity? assistantWindow;
+    public static bool IsAssistant(nint handle)
+    {
+        var identity = Volatile.Read(ref assistantWindow);
+        if (handle == 0 || identity == null || identity.Handle != handle) return false;
+        GetWindowThreadProcessId(handle, out uint owner);
+        return owner == identity.ProcessId;
+    }
+    public static void SetAssistant(nint handle, uint processId) => Volatile.Write(ref assistantWindow, new(handle, processId));
     private delegate bool WindowCallback(nint hwnd, nint parameter);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, nint parameter);
@@ -52,13 +75,14 @@ internal static class WindowSource
         return QueryFullProcessImageName(handle, 0, buffer, ref length) ? buffer.ToString() : null;
     }
 
-    public static List<CaptionWindow> Discover()
+    public static List<CaptionWindow> Discover(bool includeAssistant = false)
     {
         var windows = new List<CaptionWindow>();
         var paths = new Dictionary<uint, string?>();
         EnumWindows((hwnd, _) =>
         {
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
+            if (!includeAssistant && IsAssistant(hwnd)) return true;
             GetWindowThreadProcessId(hwnd, out var processId);
             if (!paths.TryGetValue(processId, out var path)) paths[processId] = path = Executable(processId);
             if (!string.Equals(Path.GetFileName(path), "doubao.exe", StringComparison.OrdinalIgnoreCase)) return true;
