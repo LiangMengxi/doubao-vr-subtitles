@@ -153,7 +153,7 @@ void copy_clipboard_image(uint32_t width, uint32_t height, std::span<const uint8
     bool opened = false;
     for (int attempt = 0; attempt < 10 && !opened; ++attempt) {
         if (OpenClipboard(nullptr)) opened = true;
-        else std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        else std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!opened) throw winrt::hresult_error(E_ACCESSDENIED, L"无法打开系统剪贴板。");
     ScopeExit close_clipboard([&] { CloseClipboard(); });
@@ -312,10 +312,14 @@ void AssistantMouse::update(const std::optional<std::array<float, 2>>& point, bo
 }
 
 MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
-    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop) {
+    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop,
+    const std::optional<vr::HmdMatrix34_t>& baseline_pose,
+    vr::EVREye eye) {
     ID3D11ShaderResourceView* mirror = nullptr;
-    const auto result = vr::VRCompositor()->GetMirrorTextureD3D11(vr::Eye_Left, device.get(), reinterpret_cast<void**>(&mirror));
-    if (result != vr::VRCompositorError_None || !mirror) throw winrt::hresult_error(E_FAIL, L"无法取得 SteamVR 截图纹理。");
+    const auto result = vr::VRCompositor()->GetMirrorTextureD3D11(eye, device.get(), reinterpret_cast<void**>(&mirror));
+    if (result != vr::VRCompositorError_None || !mirror) {
+        throw winrt::hresult_error(E_FAIL, eye == vr::Eye_Right ? L"无法取得 SteamVR 右眼截图纹理。" : L"无法取得 SteamVR 截图纹理。");
+    }
     ScopeExit release([&] { vr::VRCompositor()->ReleaseMirrorTextureD3D11(mirror); });
     D3D11_SHADER_RESOURCE_VIEW_DESC view_description{};
     mirror->GetDesc(&view_description);
@@ -364,9 +368,14 @@ MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
     }
     if (stop.stop_requested()) throw winrt::hresult_error(E_ABORT);
     vr::HmdMatrix34_t pose{};
-    bool pose_ready = vr::VRCompositor()->GetFrameTiming(&timing) && timing.m_HmdPose.bPoseIsValid;
-    if (pose_ready) pose = timing.m_HmdPose.mDeviceToAbsoluteTracking;
-    else {
+    bool pose_ready = false;
+    if (baseline_pose) {
+        pose = *baseline_pose;
+        pose_ready = true;
+    } else if (vr::VRCompositor()->GetFrameTiming(&timing) && timing.m_HmdPose.bPoseIsValid) {
+        pose = timing.m_HmdPose.mDeviceToAbsoluteTracking;
+        pose_ready = true;
+    } else {
         std::array<vr::TrackedDevicePose_t, vr::k_unMaxTrackedDeviceCount> poses{};
         vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::VRCompositor()->GetTrackingSpace(), 0, poses.data(), static_cast<uint32_t>(poses.size()));
         if (poses[vr::k_unTrackedDeviceIndex_Hmd].bPoseIsValid) {
@@ -415,12 +424,12 @@ MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
             }
         }
     }
-    const auto eye = vr::VRSystem()->GetEyeToHeadTransform(vr::Eye_Left);
+    const auto eye_transform = vr::VRSystem()->GetEyeToHeadTransform(eye);
     std::array<std::array<float, 4>, 3> world{};
     for (size_t row = 0; row < 3; ++row) {
         for (size_t column = 0; column < 4; ++column) {
             world[row][column] = column == 3 ? pose.m[row][3] : 0;
-            for (size_t axis = 0; axis < 3; ++axis) world[row][column] += pose.m[row][axis] * eye.m[axis][column];
+            for (size_t axis = 0; axis < 3; ++axis) world[row][column] += pose.m[row][axis] * eye_transform.m[axis][column];
         }
     }
     auto& projection = output.projection;
@@ -429,7 +438,7 @@ MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
     projection.up = {world[0][1], world[1][1], world[2][1]};
     projection.back = {world[0][2], world[1][2], world[2][2]};
     float right = 0, bottom = 0;
-    vr::VRSystem()->GetProjectionRaw(vr::Eye_Left, &projection.left, &right, &projection.top, &bottom);
+    vr::VRSystem()->GetProjectionRaw(eye, &projection.left, &right, &projection.top, &bottom);
     projection.width = right - projection.left; projection.height = bottom - projection.top;
     return output;
 }

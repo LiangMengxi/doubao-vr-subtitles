@@ -151,6 +151,8 @@ internal static class NativeBridge
     public static extern int AssistantStatus(BridgeHandle bridge, ref AssistantStatus status);
     [DllImport(Library, EntryPoint = "bridge_assistant_image", CallingConvention = CallingConvention.Cdecl)]
     public static extern int AssistantImage(BridgeHandle bridge, ulong sequence, AssistantImageBuffer image);
+    [DllImport(Library, EntryPoint = "bridge_assistant_reset_position", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int AssistantResetPosition(BridgeHandle bridge);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, in int value, uint size);

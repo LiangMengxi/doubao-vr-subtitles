@@ -15,10 +15,6 @@ void check_overlay(vr::EVROverlayError result) {
     if (result != vr::VROverlayError_None) throw winrt::hresult_error(E_FAIL,
         winrt::to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(result)));
 }
-void check_input(vr::EVRInputError result) {
-    if (result != vr::VRInputError_None) throw winrt::hresult_error(E_FAIL,
-        L"SteamVR 手柄绑定尚未就绪（" + winrt::to_hstring(static_cast<int>(result)) + L"）。");
-}
 spatial::Vector column(const vr::HmdMatrix34_t& matrix, size_t index) {
     return {matrix.m[0][index], matrix.m[1][index], matrix.m[2][index]};
 }
@@ -46,6 +42,25 @@ vr::HmdMatrix34_t inverse(const vr::HmdMatrix34_t& source) {
 spatial::Plane panel(const vr::HmdMatrix34_t& pose, float width, float height) {
     return {column(pose, 3), column(pose, 0), column(pose, 1), column(pose, 2), width, height};
 }
+spatial::Plane standard_placement(const vr::HmdMatrix34_t& head_pose, float width, float distance, bool right_side = true) {
+    const auto head_pos = column(head_pose, 3);
+    const auto head_right = column(head_pose, 0);
+    const auto head_up = column(head_pose, 1);
+    const auto head_back = column(head_pose, 2);
+    const auto forward = head_back * -1.f;
+    if (!right_side) {
+        auto p = panel(head_pose, width, width);
+        p.center = p.center - p.back * distance;
+        return p;
+    }
+    constexpr float angle = 0.55f;
+    const auto dir = (forward * std::cos(angle) + head_right * std::sin(angle)).normalized(forward);
+    const auto center = head_pos + dir * distance;
+    const auto plane_back = (head_pos - center).normalized(head_back);
+    const auto plane_right = head_up.cross(plane_back).normalized(head_right);
+    const auto plane_up = plane_back.cross(plane_right).normalized(head_up);
+    return {center, plane_right, plane_up, plane_back, width, width};
+}
 
 class OwnedOverlay {
 public:
@@ -67,34 +82,79 @@ public:
     explicit Actions(std::wstring_view manifest) {
         const std::filesystem::path path(manifest);
         if (!path.is_absolute() || !std::filesystem::is_regular_file(path)) throw winrt::hresult_invalid_argument(L"找不到手柄动作清单。");
-        check_input(vr::VRInput()->SetActionManifestPath(winrt::to_string(manifest).c_str()));
-        check_input(vr::VRInput()->GetActionSetHandle("/actions/assistant", &set.ulActionSet));
-        constexpr std::array names{"capture", "left_trigger", "right_trigger", "left_grip", "right_grip", "scroll"};
-        for (size_t index = 0; index < names.size(); ++index) {
-            const auto name = std::string("/actions/assistant/in/") + names[index];
-            check_input(vr::VRInput()->GetActionHandle(name.c_str(), &handles[index]));
+        if (vr::VRInput()) {
+            if (vr::VRInput()->SetActionManifestPath(winrt::to_string(manifest).c_str()) == vr::VRInputError_None) {
+                if (vr::VRInput()->GetActionSetHandle("/actions/assistant", &set.ulActionSet) == vr::VRInputError_None) {
+                    constexpr std::array names{"capture", "left_trigger", "right_trigger", "left_grip", "right_grip", "scroll"};
+                    bool all_handles_ok = true;
+                    for (size_t index = 0; index < names.size(); ++index) {
+                        const auto name = std::string("/actions/assistant/in/") + names[index];
+                        if (vr::VRInput()->GetActionHandle(name.c_str(), &handles[index]) != vr::VRInputError_None) {
+                            all_handles_ok = false;
+                        }
+                    }
+                    input_available = all_handles_ok;
+                }
+            }
         }
     }
-    void update() { check_input(vr::VRInput()->UpdateActionState(&set, sizeof(set), 1)); }
+    void update() {
+        if (input_available && vr::VRInput()) {
+            vr::VRInput()->UpdateActionState(&set, sizeof(set), 1);
+        }
+        fallback_pressed.fill(false);
+        fallback_scroll = 0.f;
+        if (vr::VRSystem()) {
+            const auto left_index = vr::VRSystem()->GetTrackedDeviceIndexForControllerRole(vr::TrackedControllerRole_LeftHand);
+            vr::VRControllerState_t left_state{};
+            if (left_index != vr::k_unTrackedDeviceIndexInvalid && vr::VRSystem()->GetControllerState(left_index, &left_state, sizeof(left_state))) {
+                fallback_pressed[0] = (left_state.ulButtonPressed & (vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Touchpad) | vr::ButtonMaskFromId(vr::k_EButton_IndexController_JoyStick))) != 0;
+                fallback_pressed[1] = ((left_state.ulButtonPressed & vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger)) != 0) || (left_state.rAxis[1].x > 0.55f);
+                fallback_pressed[3] = ((left_state.ulButtonPressed & (vr::ButtonMaskFromId(vr::k_EButton_Grip) | vr::ButtonMaskFromId(vr::k_EButton_Axis2))) != 0) || (left_state.rAxis[2].x > 0.55f);
+            }
+            const auto right_index = vr::VRSystem()->GetTrackedDeviceIndexForControllerRole(vr::TrackedControllerRole_RightHand);
+            vr::VRControllerState_t right_state{};
+            if (right_index != vr::k_unTrackedDeviceIndexInvalid && vr::VRSystem()->GetControllerState(right_index, &right_state, sizeof(right_state))) {
+                fallback_pressed[2] = ((right_state.ulButtonPressed & vr::ButtonMaskFromId(vr::k_EButton_SteamVR_Trigger)) != 0) || (right_state.rAxis[1].x > 0.55f);
+                fallback_pressed[4] = ((right_state.ulButtonPressed & (vr::ButtonMaskFromId(vr::k_EButton_Grip) | vr::ButtonMaskFromId(vr::k_EButton_Axis2))) != 0) || (right_state.rAxis[2].x > 0.55f);
+                for (const float y : {right_state.rAxis[0].y, right_state.rAxis[3].y}) {
+                    if (std::abs(y) > 0.1f && std::abs(y) > std::abs(fallback_scroll)) fallback_scroll = y;
+                }
+            }
+        }
+    }
     bool pressed(size_t index) const {
-        vr::InputDigitalActionData_t value{};
-        check_input(vr::VRInput()->GetDigitalActionData(handles[index], &value, sizeof(value), vr::k_ulInvalidInputValueHandle));
-        return value.bActive && value.bState;
+        if (input_available && vr::VRInput()) {
+            vr::InputDigitalActionData_t value{};
+            if (vr::VRInput()->GetDigitalActionData(handles[index], &value, sizeof(value), vr::k_ulInvalidInputValueHandle) == vr::VRInputError_None) {
+                if (value.bActive && value.bState) return true;
+            }
+        }
+        return index < fallback_pressed.size() ? fallback_pressed[index] : false;
     }
     float scroll() const {
-        vr::InputAnalogActionData_t value{};
-        check_input(vr::VRInput()->GetAnalogActionData(handles[5], &value, sizeof(value), vr::k_ulInvalidInputValueHandle));
-        return value.bActive ? value.y : 0;
+        if (input_available && vr::VRInput()) {
+            vr::InputAnalogActionData_t value{};
+            if (vr::VRInput()->GetAnalogActionData(handles[5], &value, sizeof(value), vr::k_ulInvalidInputValueHandle) == vr::VRInputError_None) {
+                if (value.bActive && std::abs(value.y) > 0.01f) return value.y;
+            }
+        }
+        return fallback_scroll;
     }
 private:
+    bool input_available = false;
     vr::VRActiveActionSet_t set{};
     std::array<vr::VRActionHandle_t, 6> handles{};
+    std::array<bool, 5> fallback_pressed{};
+    float fallback_scroll = 0.f;
 };
 
 class ControllerAim {
 public:
     explicit ControllerAim(std::string_view path) {
-        check_input(vr::VRInput()->GetInputSourceHandle(path.data(), &source));
+        if (vr::VRInput()) {
+            vr::VRInput()->GetInputSourceHandle(path.data(), &source);
+        }
     }
     std::optional<vr::HmdMatrix34_t> pose(vr::TrackedDeviceIndex_t index, const vr::HmdMatrix34_t& device) {
         const auto now = std::chrono::steady_clock::now();
@@ -110,9 +170,23 @@ public:
         if (model[0] == 0) return {};
         constexpr std::array<std::string_view, 2> names{"tip", "openxr_aim"};
         vr::RenderModel_ControllerMode_State_t mode{};
+        vr::VRControllerState_t controller_state{};
+        bool has_controller_state = false;
         for (const auto name : names) {
             vr::RenderModel_ComponentState_t component{};
-            if (vr::VRRenderModels()->GetComponentStateForDevicePath(model.data(), name.data(), source, &mode, &component)) {
+            bool got_component = false;
+            if (source != vr::k_ulInvalidInputValueHandle && vr::VRRenderModels()) {
+                got_component = vr::VRRenderModels()->GetComponentStateForDevicePath(model.data(), name.data(), source, &mode, &component);
+            }
+            if (!got_component && vr::VRRenderModels() && vr::VRSystem()) {
+                if (!has_controller_state) {
+                    has_controller_state = vr::VRSystem()->GetControllerState(index, &controller_state, sizeof(controller_state));
+                }
+                if (has_controller_state) {
+                    got_component = vr::VRRenderModels()->GetComponentState(model.data(), name.data(), &controller_state, &mode, &component);
+                }
+            }
+            if (got_component) {
                 if (const auto result = assistant::aim_pose(device, component.mTrackingToComponentLocal)) return result;
             }
         }
@@ -201,7 +275,7 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
         vr::HmdMatrix34_t placement{};
         vr::HmdMatrix34_t grab_offset{};
         spatial::Selection selection;
-        bool positioned = false, previous_toggle = true, input_ready = false, tracking_ready = false;
+        bool positioned = false, previous_toggle = true, previous_dashboard = false, input_ready = false, tracking_ready = false;
         std::array<bool, 2> previous_grips{true, true};
         int grabbed = -1;
         auto armed_at = std::chrono::steady_clock::now();
@@ -259,6 +333,16 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                 check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
                 positioned = true;
             }
+            const bool auto_reset = reset_on_dashboard.load() && (dashboard && !previous_dashboard);
+            if (reset_requested.exchange(false) || auto_reset) {
+                const float current_width = panel_width.load();
+                const auto standard = standard_placement(head.mDeviceToAbsoluteTracking, current_width, request.distance, true);
+                placement = transform(standard);
+                check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
+                positioned = true;
+                grabbed = -1;
+            }
+            previous_dashboard = dashboard;
             if (!tracking_ready) { mailbox->update(0, L"助手已连接"); tracking_ready = true; }
             if (dashboard) {
                 mouse.release(); grabbed = -1;
@@ -284,9 +368,13 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                 input_ready = false;
                 vr::VROverlay()->HideOverlay(pointer_overlay.handle);
                 std::optional<spatial::Plane> measured;
-                if (hands[0] && hands[1]) measured = spatial::frame(column(head.mDeviceToAbsoluteTracking, 3),
-                    column(head.mDeviceToAbsoluteTracking, 0), column(head.mDeviceToAbsoluteTracking, 1), column(head.mDeviceToAbsoluteTracking, 2),
-                    column(*hands[0], 3), column(*hands[1], 3));
+                if (hands[0] && hands[1]) {
+                    const auto left_point = aims[0] ? column(*aims[0], 3) : column(*hands[0], 3);
+                    const auto right_point = aims[1] ? column(*aims[1], 3) : column(*hands[1], 3);
+                    measured = spatial::frame(column(head.mDeviceToAbsoluteTracking, 3),
+                        column(head.mDeviceToAbsoluteTracking, 0), column(head.mDeviceToAbsoluteTracking, 1), column(head.mDeviceToAbsoluteTracking, 2),
+                        left_point, right_point);
+                }
                 const auto captured = selection.update(triggers[0], triggers[1], measured);
                 const auto visible_region = selection.region();
                 if (selection.state() == spatial::Selection::State::armed && !captured) {
@@ -314,19 +402,20 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                         suppress = true;
                         check_overlay(vr::VROverlay()->HideOverlay(overlay));
                     }
+                    const auto captured_head = head.mDeviceToAbsoluteTracking;
+                    const auto capture_eye = eye.load();
                     mailbox->update(3, L"正在截图…");
                     capture_done = false;
-                    capture_worker = std::jthread([&, captured](std::stop_token capture_stop) {
+                    capture_worker = std::jthread([&, captured, captured_head, capture_eye](std::stop_token capture_stop) {
                         platform::ScopeExit complete([&] { capture_done = true; });
                         try {
                             platform::ApartmentScope capture_apartment;
                             Graphics capture_graphics(adapter);
-                            const auto image = platform::mirror_pixels(capture_graphics.device, capture_graphics.context, capture_stop);
+                            const auto image = platform::mirror_pixels(capture_graphics.device, capture_graphics.context, capture_stop, captured_head, capture_eye);
                             spatial::Image result;
                             try { result = spatial::rectify(*captured, image.projection, image.pixels, image.width, image.height, capture_stop); }
-                            catch (const std::invalid_argument&) { throw winrt::hresult_invalid_argument(L"选区过小或超出左眼视野，请将选框移到视野中央后重试。"); }
+                            catch (const std::invalid_argument&) { throw winrt::hresult_invalid_argument(L"选区过小或超出视野，请将选框移到视野中央后重试。"); }
                             if (capture_stop.stop_requested()) return;
-                            try { platform::copy_clipboard_image(result.width, result.height, result.pixels); } catch (...) { }
                             std::lock_guard lock(mailbox->mutex);
                             mailbox->pixels = std::move(result.pixels);
                             mailbox->width = result.width; mailbox->height = result.height;

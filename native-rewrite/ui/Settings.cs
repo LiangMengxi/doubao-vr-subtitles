@@ -37,6 +37,8 @@ internal sealed class Settings
     [JsonPropertyName("assistant_activate_on_click"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool AssistantActivateOnClick { get; set; }
     [JsonPropertyName("assistant_auto_attach")] public bool AssistantAutoAttach { get; set; } = true;
     [JsonPropertyName("assistant_width")] public float AssistantWidth { get; set; } = .7f;
+    [JsonPropertyName("assistant_capture_eye"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public uint AssistantCaptureEye { get; set; }
+    [JsonPropertyName("assistant_reset_on_dashboard"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool AssistantResetOnDashboard { get; set; }
 
     public static Settings Load()
     {
@@ -71,6 +73,7 @@ internal sealed class Settings
         CurvatureDegrees = Limit(CurvatureDegrees, 0, 90, 0);
         CropTop = Limit(CropTop, 0, 120, 0);
         AssistantWidth = Limit(AssistantWidth, .3f, 1.5f, .7f);
+        AssistantCaptureEye = AssistantCaptureEye > 1 ? 0 : AssistantCaptureEye;
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
         AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
         if (!BackgroundFiles.IsOwnedName(BackgroundImage)) BackgroundImage = "";

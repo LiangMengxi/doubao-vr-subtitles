@@ -22,6 +22,7 @@ internal sealed partial class MainWindow
     private readonly Button assistantConnect = new() { Content = "连接浮窗", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Button assistantVr = new() { Content = "开启VR", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Button assistantAttach = new() { Content = "添加截图", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
+    private readonly Button assistantResetPosition = new() { Content = "重置浮窗位置到视野右侧", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
     private readonly ToggleSwitch assistantBorder = new() { Header = "显示捕获黄框" };
     private readonly Image assistantPreview = new() { Stretch = Stretch.Uniform, MaxHeight = 260 };
     private readonly SemaphoreSlim assistantOperations = new(1, 1);
@@ -56,12 +57,30 @@ internal sealed partial class MainWindow
         var sizing = Column(16);
         sizing.Children.Add(Slider("浮窗大小", .3, 1.5, .05, settings.AssistantWidth, value => settings.AssistantWidth = (float)value, value => $"{value * 100:F0}%",
             ("小", .5), ("标准", .7), ("大", 1)));
+        assistantResetPosition.Click += async (_, _) => await ResetAssistantPositionAsync();
+        sizing.Children.Add(assistantResetPosition);
+        var menuReset = new ToggleSwitch { Header = "按菜单键自动重置位置", IsOn = settings.AssistantResetOnDashboard };
+        menuReset.Toggled += (_, _) => { settings.AssistantResetOnDashboard = menuReset.IsOn; ApplyConfiguration(); };
+        sizing.Children.Add(menuReset);
         page.Children.Add(Card(sizing));
         var options = Column();
         options.Children.Add(assistantSources);
         var refresh = new Button { Content = "刷新窗口", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
         refresh.Click += (_, _) => RefreshAssistantSources();
         options.Children.Add(refresh);
+        var eyeSelector = new ComboBox
+        {
+            Header = "空间截图视角",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ItemsSource = new[] { "左眼（默认）", "右眼" },
+            SelectedIndex = settings.AssistantCaptureEye == 1 ? 1 : 0
+        };
+        eyeSelector.SelectionChanged += (_, _) =>
+        {
+            settings.AssistantCaptureEye = (uint)(eyeSelector.SelectedIndex == 1 ? 1 : 0);
+            ApplyConfiguration();
+        };
+        options.Children.Add(eyeSelector);
         var activate = new ToggleSwitch { Header = "交互时激活豆包浮窗", IsOn = settings.AssistantActivateOnClick };
         activate.Toggled += (_, _) => { settings.AssistantActivateOnClick = activate.IsOn; ApplyConfiguration(); if (assistantRunning) assistantStatus.Text = "重新连接后生效"; };
         options.Children.Add(activate);
@@ -106,6 +125,7 @@ internal sealed partial class MainWindow
         assistantConnect.IsEnabled = assistantVr.IsEnabled = !assistantBusy && !shuttingDown;
         assistantSources.IsEnabled = !assistantRunning && !assistantBusy;
         assistantAttach.IsEnabled = assistantRunning && assistantScreenshot != null && !assistantBusy && !shuttingDown;
+        assistantResetPosition.IsEnabled = assistantRunning && assistantVrEnabled && !assistantBusy && !shuttingDown;
     }
 
     private async Task ChangeAssistantAsync(bool toggleVr)
@@ -143,7 +163,7 @@ internal sealed partial class MainWindow
             if (previous != null) await previous.StopAsync();
             assistantStatus.Text = enableVr ? "正在连接 SteamVR…" : "正在连接浮窗…";
             assistantHost = await AssistantHost.StartAsync(target, enableVr, settings.AssistantActivateOnClick, lifetime.Token,
-                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.Border, settings.AssistantWidth);
+                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.Border, settings.AssistantWidth, settings.AssistantCaptureEye, settings.AssistantResetOnDashboard);
             assistantTarget = target; assistantRunning = true; assistantVrEnabled = enableVr;
             assistantPreviewSequence = 0;
             assistantImageSequence = 0;
@@ -211,7 +231,7 @@ internal sealed partial class MainWindow
         long epoch = assistantEpoch;
         try
         {
-            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth);
+            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantCaptureEye, settings.AssistantResetOnDashboard);
             if (shuttingDown || epoch != assistantEpoch || !ReferenceEquals(host, assistantHost)) return;
             var state = snapshot.Reply;
             if (state.InteractionState != lastAssistantState || state.Message != lastAssistantMessage)
@@ -265,8 +285,23 @@ internal sealed partial class MainWindow
                 if (shuttingDown || epoch != assistantEpoch) return;
                 var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
                 package.SetBitmap(RandomAccessStreamReference.CreateFromStream(encoded));
-                try { Clipboard.SetContent(package); Clipboard.Flush(); }
-                catch (Exception clipboardException) { Log.Write(clipboardException.ToString()); }
+                bool clipboardSet = false;
+                for (int attempt = 0; attempt < 5 && !clipboardSet && !shuttingDown; ++attempt)
+                {
+                    try
+                    {
+                        Clipboard.SetContent(package);
+                        Clipboard.Flush();
+                        clipboardSet = true;
+                    }
+                    catch (Exception clipboardException)
+                    {
+                        if (attempt == 4) Log.Write(clipboardException.ToString());
+                        else await Task.Delay(25);
+                    }
+                }
+                if (!clipboardSet) throw new InvalidOperationException("无法打开系统剪贴板放置截图。");
+                await Task.Delay(50);
                 assistantClipboardImage?.Dispose(); assistantClipboardImage = encoded; encoded = null!;
             }
             finally { encoded?.Dispose(); }
@@ -278,5 +313,23 @@ internal sealed partial class MainWindow
         }
         catch (Exception exception) { if (!shuttingDown) { assistantStatus.Text = exception.Message; Log.Write(exception.ToString()); } }
         finally { assistantBusy = false; assistantOperations.Release(); UpdateAssistantControls(); }
+    }
+
+    private async Task ResetAssistantPositionAsync()
+    {
+        if (assistantBusy || shuttingDown || !assistantRunning || !assistantVrEnabled || assistantHost == null) return;
+        try
+        {
+            await assistantHost.ResetPositionAsync(lifetime.Token);
+            assistantStatus.Text = "已重置浮窗位置到视野右侧";
+        }
+        catch (Exception exception)
+        {
+            if (!shuttingDown)
+            {
+                assistantStatus.Text = exception.Message;
+                Log.Write(exception.ToString());
+            }
+        }
     }
 }

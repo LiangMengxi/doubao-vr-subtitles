@@ -67,6 +67,17 @@ public:
             throw hresult_error(E_FAIL, L"无法连接 SteamVR：" + to_hstring(vr::VR_GetVRInitErrorAsEnglishDescription(error)));
         }
         initialized = true;
+        if (!request) {
+            std::array<wchar_t, MAX_PATH> module_path{};
+            const auto length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+            if (length > 0 && length < module_path.size()) {
+                std::error_code ec;
+                const auto manifest = std::filesystem::path(module_path.data()).parent_path() / L"steamvr" / L"assistant_actions.json";
+                if (std::filesystem::is_regular_file(manifest, ec) && vr::VRInput()) {
+                    vr::VRInput()->SetActionManifestPath(manifest.string().c_str());
+                }
+            }
+        }
         if (request) mailbox->update(1, L"SteamVR 已连接，正在创建悬浮层…");
         try {
             overlay_check(vr::VROverlay()->CreateOverlay(request ? "local.doubao.assistant.native" : "local.doubao.subtitle.bridge.native",
@@ -87,6 +98,8 @@ public:
     bool configure(const BridgeOptions& options) {
         if (assistant) {
             assistant->set_width(options.width);
+            assistant->set_eye(options.trim);
+            assistant->set_reset_on_dashboard(options.crop_top != 0);
             overlay_check(vr::VROverlay()->SetOverlayWidthInMeters(handle, options.width));
             overlay_check(vr::VROverlay()->SetOverlayAlpha(handle, options.opacity));
             return false;
@@ -132,6 +145,7 @@ public:
         overlay_check(vr::VROverlay()->ShowOverlay(handle));
     }
     void hide() { overlay_check(vr::VROverlay()->HideOverlay(handle)); }
+    void reset_assistant_position() noexcept { if (assistant) assistant->reset_position(); }
     void clear_texture() { overlay_check(vr::VROverlay()->ClearOverlayTexture(handle)); }
     bool quitting() {
         vr::VREvent_t event{};
@@ -244,6 +258,10 @@ public:
     BridgeOptions configuration() {
         std::lock_guard lock(mutex);
         return options;
+    }
+    void request_reset_assistant_position() noexcept {
+        reset_assistant_requested.store(true);
+        signal->wake();
     }
     void fail(std::wstring message) {
         std::lock_guard lock(mutex);
@@ -361,6 +379,9 @@ private:
                 if (assistant_request) {
                     std::lock_guard lock(assistant_mailbox->mutex);
                     if (assistant_mailbox->state == 6) throw hresult_error(E_FAIL, hstring(assistant_mailbox->message));
+                }
+                if (overlay && reset_assistant_requested.exchange(false)) {
+                    overlay->reset_assistant_position();
                 }
                 DWORD owner = 0;
                 GetWindowThreadProcessId(window, &owner);
@@ -487,6 +508,7 @@ private:
     std::mutex control;
     bool disposed = false;
     std::atomic<bool> stopping{false};
+    std::atomic<bool> reset_assistant_requested{false};
     BridgeOptions options{};
 };
 
@@ -576,6 +598,16 @@ int32_t __cdecl bridge_assistant_image(BridgeId bridge, uint64_t sequence, Bridg
         return S_OK;
     } catch (...) { return E_FAIL; }
 }
+
+int32_t __cdecl bridge_assistant_reset_position(BridgeId bridge) noexcept {
+    try {
+        auto instance = registry().acquire(bridge);
+        if (!instance) return E_HANDLE;
+        instance->request_reset_assistant_position();
+        return S_OK;
+    } catch (...) { return E_FAIL; }
+}
+
 BridgeId __cdecl bridge_create() noexcept {
     try { return registry().create(); } catch (...) { return 0; }
 }

@@ -2,12 +2,14 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <winrt/base.h>
+#include <openvr.h>
 #include <array>
 #include <span>
 #include <string_view>
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include "spatial_selection.h"
 
@@ -41,7 +43,9 @@ struct MirrorPixels {
     spatial::Projection projection;
 };
 MirrorPixels mirror_pixels(const winrt::com_ptr<ID3D11Device>& device,
-    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop);
+    const winrt::com_ptr<ID3D11DeviceContext>& context, std::stop_token stop,
+    const std::optional<vr::HmdMatrix34_t>& baseline_pose = std::nullopt,
+    vr::EVREye eye = vr::Eye_Left);
 struct AudioDevice {
     std::wstring id;
     std::wstring name;

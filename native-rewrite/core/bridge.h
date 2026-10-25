@@ -166,6 +166,7 @@ BRIDGE_API int32_t __cdecl bridge_assistant_paste(const BridgeAssistantTarget& t
 BRIDGE_API int32_t __cdecl bridge_assistant_start(BridgeId bridge, const BridgeAssistantRequest& request) noexcept;
 BRIDGE_API int32_t __cdecl bridge_assistant_status(BridgeId bridge, BridgeAssistantStatus& status) noexcept;
 BRIDGE_API int32_t __cdecl bridge_assistant_image(BridgeId bridge, uint64_t sequence, BridgeAssistantImage& image) noexcept;
+BRIDGE_API int32_t __cdecl bridge_assistant_reset_position(BridgeId bridge) noexcept;
 BRIDGE_API int32_t __cdecl bridge_caption_button(uintptr_t window, uint32_t process_id, BridgeCaptionButton& button, BridgeError& error) noexcept;
 BRIDGE_API int32_t __cdecl bridge_caption_close(const BridgeCaptionButton& button, BridgeError& error) noexcept;
 BRIDGE_API int32_t __cdecl bridge_audio_devices(uint32_t flow, BridgeAudioDevices& devices, BridgeError& error) noexcept;
