@@ -55,6 +55,8 @@ internal static class WindowSource
     [DllImport("user32.dll")] public static extern bool IsIconic(nint hwnd);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint hwnd, out Rect rect);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(nint hwnd, uint message, nuint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint hwnd, StringBuilder text, int maximum);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint hwnd, StringBuilder text, int maximum);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint hwnd, int index);
@@ -103,5 +105,27 @@ internal static class WindowSource
     {
         GetWindowThreadProcessId(window.Handle, out var owner);
         return owner == window.ProcessId && IsWindowVisible(window.Handle);
+    }
+
+    public static bool TryGetBounds(nint hwnd, out (int Left, int Top, int Width, int Height) bounds)
+    {
+        if (hwnd != 0 && GetWindowRect(hwnd, out var rect) && rect.Right > rect.Left && rect.Bottom > rect.Top)
+        {
+            bounds = (rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+            return true;
+        }
+        bounds = default;
+        return false;
+    }
+
+    public static void RestoreBounds(nint hwnd, (int Left, int Top, int Width, int Height) bounds)
+    {
+        if (hwnd == 0 || bounds.Width <= 0 || bounds.Height <= 0) return;
+        SetWindowPos(hwnd, 0, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x0004 | 0x0010);
+    }
+
+    public static void PostClose(nint hwnd)
+    {
+        if (hwnd != 0) PostMessageW(hwnd, 0x0010, 0, 0);
     }
 }

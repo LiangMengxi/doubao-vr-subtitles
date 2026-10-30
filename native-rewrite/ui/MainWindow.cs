@@ -27,11 +27,14 @@ internal sealed partial class MainWindow : Window
     private readonly Button vrButton = new() { Content = "开启VR", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Button captureButton = new() { Content = "连接预览", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly ToggleSwitch borderToggle = new() { Header = "显示捕获黄框" };
+    private readonly ToggleSwitch compatibilityToggle = new() { Header = "兼容模式" };
+    private readonly TextBlock compatibilityNotice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75, Visibility = Visibility.Collapsed };
+    private readonly ToggleSwitch autoRestartToggle = new() { Header = "定时自动重启字幕窗口" };
     private readonly byte[] previewBuffer = new byte[640 * 240 * 4];
     private readonly PreviewBuffer nativePreview = new();
     private BridgeHandle? bridge;
     private CaptionWindow? connected;
-    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr;
+    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr, syncingCompatibility;
     private int selectedPage;
     private ulong previewSequence;
     private WriteableBitmap? bitmap;
@@ -44,6 +47,12 @@ internal sealed partial class MainWindow : Window
     public MainWindow(bool smokeTest)
     {
         this.smokeTest = smokeTest;
+        bool versionChanged = !string.Equals(settings.CheckedAppVersion, Settings.CurrentAppVersion, StringComparison.Ordinal);
+        if (versionChanged)
+        {
+            if (Settings.IsBelowFullSupport) settings.CompatibilityMode = true;
+            settings.CheckedAppVersion = Settings.CurrentAppVersion;
+        }
         preferences = new(DispatcherQueue, ConfigureAsync, PersistSettingsAsync, PreferenceFailure);
         Title = "豆包VR字幕";
         AppWindow.Resize(new SizeInt32(590, 740));
@@ -80,8 +89,10 @@ internal sealed partial class MainWindow : Window
             NativeBridge.EnsureVersion();
             bridge = new BridgeHandle();
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
+            NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
         }
         catch (Exception exception) { Report(new InvalidOperationException("原生核心尚未就绪，请运行 build.ps1 完成构建。" + exception.Message)); }
+        if (versionChanged) ApplyConfiguration();
         if (Settings.LoadWarning != null) status.Text = Settings.LoadWarning;
         RefreshSources();
         ApplyBackground();
@@ -198,9 +209,19 @@ internal sealed partial class MainWindow : Window
         theme.SelectionChanged += (_, _) => { settings.Appearance = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system"; ApplyTheme(); ApplyConfiguration(); };
         appearance.Children.Add(theme);
         appearance.Children.Add(ColorSettings());
-        borderToggle.IsOn = settings.Border;
+        borderToggle.IsOn = !settings.EffectiveCompatibilityMode && settings.Border;
         borderToggle.Toggled += async (_, _) => await UpdateCaptureBorderAsync(borderToggle.IsOn);
         sourceCard.Children.Add(borderToggle);
+        compatibilityToggle.IsOn = settings.EffectiveCompatibilityMode;
+        compatibilityToggle.Toggled += async (_, _) => await UpdateCompatibilityModeAsync(compatibilityToggle.IsOn);
+        sourceCard.Children.Add(compatibilityToggle);
+        sourceCard.Children.Add(compatibilityNotice);
+        autoRestartToggle.IsOn = settings.AutoRestartCaptions;
+        autoRestartToggle.Toggled += (_, _) => { settings.AutoRestartCaptions = autoRestartToggle.IsOn; ResetAutoRestartSchedule(); ApplyConfiguration(); };
+        sourceCard.Children.Add(autoRestartToggle);
+        sourceCard.Children.Add(Slider("重启间隔时间（分钟）", 0, 120, 5, settings.AutoRestartIntervalMinutes,
+            value => { settings.AutoRestartIntervalMinutes = (float)Math.Round(value); ResetAutoRestartSchedule(); },
+            value => value <= 0 ? "已停用（0 分钟）" : $"{value:F0} 分钟", ("15分", 15), ("30分", 30), ("60分", 60)));
         appearance.Children.Add(BackgroundSettings());
         preferences.Children.Add(SettingsSection("主题与背景", appearance));
         preferences.Children.Add(SettingsSection("字幕捕获", sourceCard));
@@ -244,6 +265,52 @@ internal sealed partial class MainWindow : Window
         AddCell(footer, exit, 1);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
+        UpdateCompatibilityUi();
+    }
+
+    private void UpdateCompatibilityUi()
+    {
+        bool compat = settings.EffectiveCompatibilityMode;
+        bool forced = Settings.IsBelowFullSupport;
+        string noticeText = Settings.CompatibilityPromptText;
+        syncingCompatibility = true;
+        syncingBorder = true;
+        try
+        {
+            compatibilityToggle.IsOn = compat;
+            compatibilityToggle.IsEnabled = !forced;
+            borderToggle.IsEnabled = !compat;
+            borderToggle.IsOn = !compat && settings.Border;
+            assistantBorder.IsEnabled = !compat;
+            assistantBorder.IsOn = !compat && settings.Border;
+            compatibilityNotice.Text = noticeText;
+            compatibilityNotice.Visibility = compat ? Visibility.Visible : Visibility.Collapsed;
+            assistantCompatibilityNotice.Text = noticeText;
+            assistantCompatibilityNotice.Visibility = compat ? Visibility.Visible : Visibility.Collapsed;
+        }
+        finally
+        {
+            syncingBorder = false;
+            syncingCompatibility = false;
+        }
+    }
+
+    private async Task UpdateCompatibilityModeAsync(bool enabled)
+    {
+        if (syncingCompatibility || shuttingDown) return;
+        if (Settings.IsBelowFullSupport)
+        {
+            UpdateCompatibilityUi();
+            return;
+        }
+        if (settings.CompatibilityMode == enabled) return;
+        settings.CompatibilityMode = enabled;
+        UpdateCompatibilityUi();
+        if (bridge != null) NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
+        ApplyConfiguration();
+        try { if (running) await StartAsync(vrEnabled); }
+        catch (Exception exception) { Report(exception); }
+        await ReconnectAssistantAsync();
     }
 
     private static Grid EqualColumns(int count)
@@ -360,7 +427,8 @@ internal sealed partial class MainWindow : Window
             UpdateCaptionControls();
             captureButton.IsEnabled = vrButton.IsEnabled = false;
             status.Text = "正在连接捕获…";
-            Log.Write($"Capture request: class={source.ClassName}, size={source.Width}x{source.Height}, vr={enableVr}, border={settings.Border}.");
+            Log.Write($"Capture request: class={source.ClassName}, size={source.Width}x{source.Height}, vr={enableVr}, border={settings.EffectiveBorder}, compat={settings.EffectiveCompatibilityMode}.");
+            NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
             await Task.Run(() => NativeBridge.StartCapture(bridge, (nuint)source.Handle, options));
             running = true;
             reconnecting = false;
@@ -368,6 +436,7 @@ internal sealed partial class MainWindow : Window
             captureBorder = options.Border != 0;
             connected = source;
             previewSequence = 0;
+            ResetAutoRestartSchedule();
             captureButton.Content = "停止连接";
             vrButton.Content = enableVr ? "关闭VR" : "开启VR";
             RequestLiveConfiguration();
@@ -385,6 +454,7 @@ internal sealed partial class MainWindow : Window
             running = vrEnabled = false;
             reconnecting = false;
             connected = null;
+            ResetAutoRestartSchedule();
             captureButton.Content = "连接预览";
             vrButton.Content = "开启VR";
             preview.Source = null;
@@ -407,7 +477,7 @@ internal sealed partial class MainWindow : Window
         try
         {
             await RefreshCaptionAsync();
-            if (shuttingDown || captions.IsBusy) return;
+            if (shuttingDown || captions.IsBusy || autoRestarting) return;
             if (!running && reconnecting && DateTime.UtcNow >= nextDiscovery)
             {
                 nextDiscovery = DateTime.UtcNow.AddSeconds(3);
@@ -415,6 +485,11 @@ internal sealed partial class MainWindow : Window
                 if (sources.SelectedItem is CaptionWindow candidate && candidate.Score >= 150) await StartAsync(reconnectVr);
             }
             if (!running || bridge == null) return;
+            if (settings.AutoRestartCaptions && settings.AutoRestartIntervalMinutes > 0 && DateTime.UtcNow >= nextAutoRestart)
+            {
+                await AutoRestartCaptionWindowAsync();
+                if (!running || bridge == null || shuttingDown) return;
+            }
             var stats = NativeBridge.Stats(bridge);
             if (stats.State == 3)
             {

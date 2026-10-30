@@ -17,6 +17,12 @@ internal sealed class CaptionController(ICaptionBackend backend)
     public string Label => Target == null ? "开启字幕" : "关闭字幕";
     private long revision;
 
+    public void SyncTarget(CaptionWindow? target)
+    {
+        ++revision;
+        Target = target;
+    }
+
     internal static CaptionWindow? Find(IReadOnlyList<CaptionWindow> windows)
     {
         var candidates = windows.Where(window => window.IsCaption).Take(2).ToArray();

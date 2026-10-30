@@ -8,6 +8,12 @@ internal sealed record SettingsSnapshot(string Json, string BackgroundImage);
 
 internal sealed class Settings
 {
+    public const int FullSupportBuild = 22000;
+    public static int OsBuild => Environment.OSVersion.Version.Build;
+    public static bool IsBelowFullSupport => OsBuild < FullSupportBuild;
+    public static string CurrentAppVersion => typeof(Settings).Assembly.GetName().Version?.ToString() ?? "0.4.2";
+    public static string CompatibilityPromptText =>
+        $"系统版本（当前 Build {OsBuild}）低于 Build {FullSupportBuild}，兼容模式，部分功能不可用";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DoubaoVR.Native");
     private static string FilePath => Path.Combine(DataDirectory, "settings.json");
     public static string? LoadWarning { get; private set; }
@@ -22,6 +28,10 @@ internal sealed class Settings
     [JsonPropertyName("crop_top")] public float CropTop { get; set; }
     [JsonPropertyName("appearance")] public string Appearance { get; set; } = "system";
     [JsonPropertyName("show_capture_border")] public bool Border { get; set; }
+    [JsonPropertyName("compatibility_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool CompatibilityMode { get; set; } = IsBelowFullSupport;
+    [JsonPropertyName("checked_app_version"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public string CheckedAppVersion { get; set; } = "";
+    [JsonPropertyName("auto_restart_captions")] public bool AutoRestartCaptions { get; set; } = true;
+    [JsonPropertyName("auto_restart_interval_minutes")] public float AutoRestartIntervalMinutes { get; set; } = 30;
     [JsonPropertyName("trim")] public bool Trim { get; set; } = true;
     [JsonPropertyName("exit_close_doubao")] public bool ExitCloseDoubao { get; set; }
     [JsonPropertyName("minimize_on_close")] public bool MinimizeOnClose { get; set; }
@@ -38,6 +48,8 @@ internal sealed class Settings
     [JsonPropertyName("assistant_auto_attach")] public bool AssistantAutoAttach { get; set; } = true;
     [JsonPropertyName("assistant_width")] public float AssistantWidth { get; set; } = .7f;
     [JsonPropertyName("assistant_reset_on_dashboard"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool AssistantResetOnDashboard { get; set; }
+    [JsonIgnore] public bool EffectiveCompatibilityMode => IsBelowFullSupport || CompatibilityMode;
+    [JsonIgnore] public bool EffectiveBorder => EffectiveCompatibilityMode || Border;
 
     public static Settings Load()
     {
@@ -57,7 +69,9 @@ internal sealed class Settings
                 LoadWarning = $"配置读取失败，已尝试备份或默认值：{exception.Message}";
             }
         }
-        return new Settings();
+        var fresh = new Settings();
+        fresh.Normalize();
+        return fresh;
     }
 
     public void Normalize()
@@ -72,6 +86,9 @@ internal sealed class Settings
         CurvatureDegrees = Limit(CurvatureDegrees, 0, 90, 0);
         CropTop = Limit(CropTop, 0, 120, 0);
         AssistantWidth = Limit(AssistantWidth, .3f, 1.5f, .7f);
+        AutoRestartIntervalMinutes = (float)Math.Round(Limit(AutoRestartIntervalMinutes, 0, 120, 30));
+        if (CheckedAppVersion is null || CheckedAppVersion.Length > 64 || CheckedAppVersion.Contains('\0')) CheckedAppVersion = "";
+        if (IsBelowFullSupport) CompatibilityMode = true;
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
         AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
         if (!BackgroundFiles.IsOwnedName(BackgroundImage)) BackgroundImage = "";
@@ -96,7 +113,7 @@ internal sealed class Settings
     {
         Size = (uint)Marshal.SizeOf<BridgeOptions>(), Width = Width, Distance = Distance,
         Horizontal = Horizontal, Vertical = Vertical, Opacity = Opacity, Pitch = Pitch, Yaw = Yaw,
-        CropTop = (uint)CropTop, Trim = Trim ? 1u : 0, Border = Border ? 1u : 0,
+        CropTop = (uint)CropTop, Trim = Trim ? 1u : 0, Border = EffectiveBorder ? 1u : 0,
         Vr = vr ? 1u : 0, Preview = preview ? 1u : 0, CurvatureDegrees = CurvatureDegrees
     };
 }

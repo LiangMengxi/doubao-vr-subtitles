@@ -40,12 +40,21 @@ struct Signal {
 };
 
 struct CaptureLifetime {
+    GraphicsCaptureItem item{nullptr};
     Direct3D11CaptureFramePool pool{nullptr};
     GraphicsCaptureSession session{nullptr};
-    ~CaptureLifetime() noexcept {
-        if (session) { try { session.Close(); } catch (...) { } }
-        if (pool) { try { pool.Close(); } catch (...) { } }
+    Direct3D11CaptureFramePool::FrameArrived_revoker frame_event;
+    GraphicsCaptureItem::Closed_revoker close_event;
+    std::shared_ptr<std::atomic<bool>> closed = std::make_shared<std::atomic<bool>>(false);
+    void reset() noexcept {
+        frame_event.revoke();
+        close_event.revoke();
+        if (session) { try { session.Close(); } catch (...) { } session = nullptr; }
+        if (pool) { try { pool.Close(); } catch (...) { } pool = nullptr; }
+        item = nullptr;
+        closed = std::make_shared<std::atomic<bool>>(false);
     }
+    ~CaptureLifetime() noexcept { reset(); }
 };
 
 std::mutex openvr_mutex;
@@ -209,6 +218,8 @@ public:
             preview = {};
         }
         stopping = false;
+        is_restarting.store(false);
+        pending_rebind_window.store(0);
         {
             std::lock_guard lock(assistant_mailbox->mutex);
             assistant_mailbox->state = 0;
@@ -254,6 +265,29 @@ public:
         signal->wake();
         return S_OK;
     }
+    int set_compatibility(uint32_t enabled) noexcept {
+        std::lock_guard control_guard(control);
+        if (disposed) return E_HANDLE;
+        if (enabled > 1) return E_INVALIDARG;
+        compatibility_mode.store(enabled != 0);
+        return S_OK;
+    }
+    int set_restarting(uint32_t restarting) noexcept {
+        std::lock_guard control_guard(control);
+        if (disposed) return E_HANDLE;
+        if (restarting > 1) return E_INVALIDARG;
+        is_restarting.store(restarting != 0);
+        signal->wake();
+        return S_OK;
+    }
+    int rebind_window(HWND window) noexcept {
+        std::lock_guard control_guard(control);
+        if (disposed) return E_HANDLE;
+        if (!window || !IsWindow(window)) return E_INVALIDARG;
+        pending_rebind_window.store(reinterpret_cast<uintptr_t>(window));
+        signal->wake();
+        return S_OK;
+    }
     BridgeOptions configuration() {
         std::lock_guard lock(mutex);
         return options;
@@ -281,6 +315,8 @@ private:
     }
     void stop_worker() {
         stopping = true;
+        is_restarting.store(false);
+        pending_rebind_window.store(0);
         signal->wake();
         if (worker.joinable()) worker.join();
         std::lock_guard lock(mutex);
@@ -308,7 +344,13 @@ private:
     }
     void capture(HWND window, DWORD process_id, std::wstring_view& stage, const std::optional<BridgeAssistantRequest>& assistant_request) {
         stage = L"检查 Windows 窗口捕获支持";
-        if (!GraphicsCaptureSession::IsSupported()) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
+        bool supported = true;
+        try {
+            supported = GraphicsCaptureSession::IsSupported();
+        } catch (...) {
+            if (!compatibility_mode.load()) throw;
+        }
+        if (!supported) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
         auto current = configuration();
         std::unique_ptr<Graphics> graphics_storage;
         stage = L"连接 SteamVR";
@@ -322,44 +364,50 @@ private:
         stage = L"创建窗口捕获 Direct3D 设备";
         check_hresult(CreateDirect3D11DeviceFromDXGIDevice(graphics.device.as<IDXGIDevice>().get(), inspectable.put()));
         auto capture_device = inspectable.as<IDirect3DDevice>();
-        stage = L"创建目标窗口捕获对象（CreateForWindow）";
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-        GraphicsCaptureItem item{nullptr};
-        check_hresult(interop->CreateForWindow(window, guid_of<GraphicsCaptureItem>(), put_abi(item)));
-        stage = L"读取目标窗口捕获尺寸";
-        auto size = item.Size();
-        if (size.Width <= 0 || size.Height <= 0 || static_cast<uint64_t>(size.Width) * size.Height > 16 * 1024 * 1024) {
-            throw hresult_error(E_OUTOFMEMORY, L"捕获窗口尺寸不受支持，请缩小字幕窗口。");
-        }
         CaptureLifetime lifetime;
-        stage = L"创建窗口捕获帧池";
-        lifetime.pool = Direct3D11CaptureFramePool::CreateFreeThreaded(capture_device,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
-        auto pool = lifetime.pool;
-        stage = L"创建窗口捕获会话";
-        lifetime.session = pool.CreateCaptureSession(item);
-        auto session = lifetime.session;
-        auto frame_event = pool.FrameArrived(auto_revoke, [wake = signal](auto&&, auto&&) { wake->wake(); });
-        auto closed = std::make_shared<std::atomic<bool>>(false);
-        auto close_event = item.Closed(auto_revoke, [closed, wake = signal](auto&&, auto&&) {
-            *closed = true;
-            wake->wake();
-        });
-        {
-            stage = L"设置捕获光标";
-            if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
-                L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled")) {
-                session.IsCursorCaptureEnabled(false);
+        SizeInt32 size{};
+        auto bind_window = [&](HWND target_window, SizeInt32& current_size) {
+            lifetime.reset();
+            stage = L"创建目标窗口捕获对象（CreateForWindow）";
+            check_hresult(interop->CreateForWindow(target_window, guid_of<GraphicsCaptureItem>(), put_abi(lifetime.item)));
+            stage = L"读取目标窗口捕获尺寸";
+            current_size = lifetime.item.Size();
+            if (current_size.Width <= 0 || current_size.Height <= 0 || static_cast<uint64_t>(current_size.Width) * current_size.Height > 16 * 1024 * 1024) {
+                throw hresult_error(E_OUTOFMEMORY, L"捕获窗口尺寸不受支持，请缩小字幕窗口。");
             }
+            stage = L"创建窗口捕获帧池";
+            lifetime.pool = Direct3D11CaptureFramePool::CreateFreeThreaded(capture_device,
+                DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, current_size);
+            stage = L"创建窗口捕获会话";
+            lifetime.session = lifetime.pool.CreateCaptureSession(lifetime.item);
+            lifetime.frame_event = lifetime.pool.FrameArrived(auto_revoke, [wake = signal](auto&&, auto&&) { wake->wake(); });
+            auto closed_flag = lifetime.closed;
+            lifetime.close_event = lifetime.item.Closed(auto_revoke, [closed_flag, wake = signal](auto&&, auto&&) {
+                closed_flag->store(true);
+                wake->wake();
+            });
+            stage = L"设置捕获光标";
+            try {
+                if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
+                    L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled")) {
+                    lifetime.session.IsCursorCaptureEnabled(false);
+                }
+            } catch (...) { }
             stage = L"设置窗口捕获边框";
-            if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
-                L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
-                session.IsBorderRequired(current.border != 0);
-            } else if (!current.border) {
-                throw hresult_error(E_NOTIMPL, L"当前 Windows 不支持关闭捕获边框，请开启边框后重试。");
+            if (!compatibility_mode.load()) {
+                try {
+                    if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
+                        L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
+                        lifetime.session.IsBorderRequired(current.border != 0);
+                    }
+                } catch (...) { }
             }
             stage = L"启动 Windows 窗口捕获";
-            session.StartCapture();
+            lifetime.session.StartCapture();
+        };
+        bind_window(window, size);
+        {
             com_ptr<ID3D11Texture2D> saved;
             BridgeOptions rendered{};
             auto last_frame = Clock::now() - std::chrono::milliseconds(50);
@@ -370,6 +418,8 @@ private:
             uint32_t surface_width = 0;
             uint32_t surface_height = 0;
             bool hidden = false;
+            bool awaiting_rebind_frame = false;
+            auto rebind_deadline = Clock::now();
             PixelPreview updated;
             while (!stopping) {
                 stage = L"检查字幕窗口和 VR 连接状态";
@@ -382,16 +432,48 @@ private:
                 if (overlay && reset_assistant_requested.exchange(false)) {
                     overlay->reset_assistant_position();
                 }
-                DWORD owner = 0;
-                GetWindowThreadProcessId(window, &owner);
-                if (*closed || !IsWindow(window) || owner != process_id || !IsWindowVisible(window)) {
-                    throw hresult_error(E_HANDLE, L"字幕窗口已关闭，等待重新连接。");
-                }
                 if (overlay && overlay->quitting()) throw hresult_error(E_ABORT, L"SteamVR 正在退出，请重新开启 VR 悬浮。");
-                if (IsIconic(window)) {
-                    if (overlay && !hidden) overlay->hide();
-                    hidden = true;
-                    continue;
+                if (const auto next_hwnd = pending_rebind_window.exchange(0)) {
+                    const auto candidate = reinterpret_cast<HWND>(next_hwnd);
+                    DWORD next_owner = 0;
+                    GetWindowThreadProcessId(candidate, &next_owner);
+                    if (IsWindow(candidate) && next_owner != 0) {
+                        try {
+                            current = configuration();
+                            bind_window(candidate, size);
+                            window = candidate;
+                            process_id = next_owner;
+                            awaiting_rebind_frame = true;
+                            rebind_deadline = Clock::now() + std::chrono::seconds(5);
+                            hidden = false;
+                        } catch (...) {
+                            is_restarting.store(false);
+                            awaiting_rebind_frame = false;
+                            throw;
+                        }
+                    } else {
+                        is_restarting.store(false);
+                        awaiting_rebind_frame = false;
+                    }
+                }
+                const bool restarting_now = is_restarting.load();
+                if (!restarting_now) awaiting_rebind_frame = false;
+                else if (awaiting_rebind_frame && Clock::now() >= rebind_deadline) {
+                    awaiting_rebind_frame = false;
+                    is_restarting.store(false);
+                }
+                const bool hold_old_frame = restarting_now && !awaiting_rebind_frame;
+                if (!restarting_now && !awaiting_rebind_frame) {
+                    DWORD owner = 0;
+                    GetWindowThreadProcessId(window, &owner);
+                    if (lifetime.closed->load() || !IsWindow(window) || owner != process_id || !IsWindowVisible(window)) {
+                        throw hresult_error(E_HANDLE, L"字幕窗口已关闭，等待重新连接。");
+                    }
+                    if (IsIconic(window)) {
+                        if (overlay && !hidden) overlay->hide();
+                        hidden = true;
+                        continue;
+                    }
                 }
                 current = configuration();
                 stage = L"更新 VR 字幕显示参数";
@@ -404,10 +486,13 @@ private:
                         + to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(static_cast<vr::EVROverlayError>(curve.error()))) : L"";
                 }
                 stage = L"读取窗口捕获帧";
-                auto frame = pool.TryGetNextFrame();
+                Direct3D11CaptureFrame frame{nullptr};
+                if (!hold_old_frame && lifetime.pool) {
+                    frame = lifetime.pool.TryGetNextFrame();
+                }
                 platform::ScopeExit release_frame([&frame] { if (frame) frame.Close(); });
                 if (frame) {
-                    while (auto newer = pool.TryGetNextFrame()) {
+                    while (auto newer = lifetime.pool.TryGetNextFrame()) {
                         frame.Close();
                         frame = std::move(newer);
                     }
@@ -453,7 +538,11 @@ private:
                     if (incoming_size != size) {
                         stage = L"按窗口尺寸重建捕获帧池";
                         size = incoming_size;
-                        pool.Recreate(capture_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+                        lifetime.pool.Recreate(capture_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+                    }
+                    if (awaiting_rebind_frame) {
+                        awaiting_rebind_frame = false;
+                        is_restarting.store(false);
                     }
                     pending = true;
                     ++serial;
@@ -513,6 +602,9 @@ private:
     bool disposed = false;
     std::atomic<bool> stopping{false};
     std::atomic<bool> reset_assistant_requested{false};
+    std::atomic<bool> compatibility_mode{false};
+    std::atomic<bool> is_restarting{false};
+    std::atomic<uintptr_t> pending_rebind_window{0};
     BridgeOptions options{};
 };
 
@@ -628,6 +720,24 @@ int32_t __cdecl bridge_configure(BridgeId bridge, const BridgeOptions& options) 
     try {
         auto instance = registry().acquire(bridge);
         return instance ? instance->configure(options) : E_HANDLE;
+    } catch (...) { return E_FAIL; }
+}
+int32_t __cdecl bridge_set_compatibility(BridgeId bridge, uint32_t enabled) noexcept {
+    try {
+        auto instance = registry().acquire(bridge);
+        return instance ? instance->set_compatibility(enabled) : E_HANDLE;
+    } catch (...) { return E_FAIL; }
+}
+int32_t __cdecl bridge_set_restarting(BridgeId bridge, uint32_t restarting) noexcept {
+    try {
+        auto instance = registry().acquire(bridge);
+        return instance ? instance->set_restarting(restarting) : E_HANDLE;
+    } catch (...) { return E_FAIL; }
+}
+int32_t __cdecl bridge_rebind_window(BridgeId bridge, uintptr_t hwnd) noexcept {
+    try {
+        auto instance = registry().acquire(bridge);
+        return instance ? instance->rebind_window(reinterpret_cast<HWND>(hwnd)) : E_HANDLE;
     } catch (...) { return E_FAIL; }
 }
 int32_t __cdecl bridge_microphone_configure(BridgeId bridge, uint32_t enabled) noexcept {

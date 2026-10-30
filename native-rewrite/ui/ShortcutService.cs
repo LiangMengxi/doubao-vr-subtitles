@@ -118,6 +118,55 @@ internal static class ShortcutService
         throw new InvalidOperationException("未找到豆包桌面版，请先安装并登录。");
     }
 
+    public static async Task<bool> CloseForRestartAsync(CaptionWindow target, CancellationToken cancellation)
+    {
+        if (!WindowSource.Same(target)) return true;
+        try
+        {
+            await new CaptionService().CloseAsync(target, cancellation);
+            if (!WindowSource.Same(target)) return true;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { }
+
+        WindowSource.PostClose(target.Handle);
+        for (int attempt = 0; attempt < 8; ++attempt)
+        {
+            await Task.Delay(80, cancellation);
+            if (!WindowSource.Same(target)) return true;
+        }
+
+        try
+        {
+            var keys = Read();
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            bool sent = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                if (!WindowSource.Same(target)) return true;
+                if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
+                {
+                    var events = keys.Select(key => Key(key, false)).Concat(keys.Reverse().Select(key => Key(key, true))).ToArray();
+                    if (SendInput((uint)events.Length, events, Marshal.SizeOf<Input>()) == events.Length)
+                    {
+                        sent = true;
+                    }
+                    else
+                    {
+                        var releases = keys.Reverse().Select(key => Key(key, true)).ToArray();
+                        SendInput((uint)releases.Length, releases, Marshal.SizeOf<Input>());
+                        break;
+                    }
+                }
+                await Task.Delay(120, cancellation);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { }
+        return !WindowSource.Same(target);
+    }
+
     public static async Task<CaptionWindow> OpenAsync(CancellationToken cancellation)
     {
         var existing = CaptionController.Find(WindowSource.Discover());

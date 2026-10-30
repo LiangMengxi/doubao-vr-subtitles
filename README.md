@@ -1,8 +1,8 @@
 # 豆包VR字幕
 
-**创作者：凉梦曦** · **v0.4.1** · Windows 10 2004 / Windows 11 x64 · SteamVR
+**创作者：凉梦曦** · **v0.4.2** · Windows 10 2004 / Windows 11 x64 · SteamVR
 
-**v0.4.1** 修复手柄射线指针与实际点击位置对齐问题，新增浮窗防飞走与位置重置机制。
+**v0.4.2** 新增 Windows 10 兼容模式与字幕窗口无感定时自动重启机制。
 
 “助手”页支持一键开启豆包对话浮窗 VR 显示、手柄射线点击与滚动、握把拖拽、浮窗大小调节与位置一键重置，以及左摇杆进入／退出空间截图模式、双手扳机细淡粉色框选并自动将截图放入豆包发送框。操作见 [使用说明](docs/USAGE.md)。
 
@@ -10,11 +10,11 @@
 
 ## 下载与安装
 
-在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.4.1) 下载：
+在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.4.2) 下载：
 
-- `DoubaoVR-v0.4.1-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
-- `DoubaoVR-v0.4.1-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
-- `DoubaoVR-v0.4.1-source.zip`：对应版本的完整公开源码及构建资料。
+- `DoubaoVR-v0.4.2-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
+- `DoubaoVR-v0.4.2-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
+- `DoubaoVR-v0.4.2-source.zip`：对应版本的完整公开源码及构建资料。
 - 三个包均提供 `.sha256` 校验文件。
 
 下载版已包含 .NET 与 WinUI 运行文件，不需要安装 Python、.NET SDK 或额外依赖管理器。需要另外安装并登录豆包桌面版；VR 显示需要 SteamVR 和头显，VRChat 不是必需依赖。

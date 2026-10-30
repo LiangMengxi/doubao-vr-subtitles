@@ -161,10 +161,13 @@ internal static class NativeBridge
     {
         int enabled = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, 20, enabled, sizeof(int));
-        int caption = background.R | background.G << 8 | background.B << 16;
-        int text = foreground.R | foreground.G << 8 | foreground.B << 16;
-        DwmSetWindowAttribute(hwnd, 35, caption, sizeof(int));
-        DwmSetWindowAttribute(hwnd, 36, text, sizeof(int));
+        if (Environment.OSVersion.Version.Build >= Settings.FullSupportBuild)
+        {
+            int caption = background.R | background.G << 8 | background.B << 16;
+            int text = foreground.R | foreground.G << 8 | foreground.B << 16;
+            DwmSetWindowAttribute(hwnd, 35, caption, sizeof(int));
+            DwmSetWindowAttribute(hwnd, 36, text, sizeof(int));
+        }
     }
 
     [DllImport(Library, EntryPoint = "bridge_version", CallingConvention = CallingConvention.Cdecl)]
@@ -184,6 +187,12 @@ internal static class NativeBridge
     }
     [DllImport(Library, EntryPoint = "bridge_configure", CallingConvention = CallingConvention.Cdecl)]
     public static extern int Configure(BridgeHandle bridge, in BridgeOptions options);
+    [DllImport(Library, EntryPoint = "bridge_set_compatibility", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int SetCompatibility(BridgeHandle bridge, uint enabled);
+    [DllImport(Library, EntryPoint = "bridge_set_restarting", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int SetRestarting(BridgeHandle bridge, uint restarting);
+    [DllImport(Library, EntryPoint = "bridge_rebind_window", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int RebindWindow(BridgeHandle bridge, nuint hwnd);
     [DllImport(Library, EntryPoint = "bridge_stop", CallingConvention = CallingConvention.Cdecl)]
     public static extern void Stop(BridgeHandle bridge);
     [DllImport(Library, EntryPoint = "bridge_stats", CallingConvention = CallingConvention.Cdecl)]
