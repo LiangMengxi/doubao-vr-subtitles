@@ -300,10 +300,54 @@ internal sealed partial class MainWindow
             }
             finally { encoded?.Dispose(); }
             if (shuttingDown || epoch != assistantEpoch) return;
+            var host = assistantHost;
+            AssistantHostSnapshot? beforeSnapshot = null;
+            if (host != null && assistantRunning)
+            {
+                try { beforeSnapshot = await host.PollAsync(true, 0, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard); }
+                catch { }
+            }
+            if (shuttingDown || epoch != assistantEpoch) return;
             var error = new BridgeError { Size = (uint)Marshal.SizeOf<BridgeError>(), Text = "" };
             int result = NativeBridge.AssistantPaste(target, ref error);
             if (result < 0) throw new COMException(error.Text, result);
-            assistantStatus.Text = "截图已自动放入豆包发送框";
+
+            bool pasteConfirmed = false;
+            if (host != null && beforeSnapshot != null && beforeSnapshot.Preview.Length > 0)
+            {
+                ulong afterSeq = beforeSnapshot.Reply.PreviewSequence;
+                for (int attempt = 0; attempt < 6 && !shuttingDown && epoch == assistantEpoch; ++attempt)
+                {
+                    await Task.Delay(90, lifetime.Token);
+                    try
+                    {
+                        var after = await host.PollAsync(true, afterSeq, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard);
+                        if (after.Preview.Length > 0)
+                        {
+                            afterSeq = after.Reply.PreviewSequence;
+                            if (HasInputRegionChanged(beforeSnapshot.Preview, beforeSnapshot.Reply.PreviewWidth, beforeSnapshot.Reply.PreviewHeight,
+                                after.Preview, after.Reply.PreviewWidth, after.Reply.PreviewHeight))
+                            {
+                                pasteConfirmed = true;
+                                if (selectedPage == 2)
+                                {
+                                    uint width = after.Reply.PreviewWidth, height = after.Reply.PreviewHeight;
+                                    if (assistantBitmap == null || assistantBitmap.PixelWidth != width || assistantBitmap.PixelHeight != height)
+                                        assistantBitmap = new WriteableBitmap((int)width, (int)height);
+                                    using (var stream = assistantBitmap.PixelBuffer.AsStream()) stream.Write(after.Preview, 0, after.Preview.Length);
+                                    assistantBitmap.Invalidate(); assistantPreview.Source = assistantBitmap; assistantPreviewSequence = afterSeq;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            assistantStatus.Text = pasteConfirmed
+                ? "截图已自动放入豆包发送框"
+                : "截图已复制到剪贴板并发送粘贴指令（请确认豆包发送框）";
         }
         catch (Exception exception) { if (!shuttingDown) { assistantStatus.Text = exception.Message; Log.Write(exception.ToString()); } }
         finally { assistantBusy = false; assistantOperations.Release(); UpdateAssistantControls(); }

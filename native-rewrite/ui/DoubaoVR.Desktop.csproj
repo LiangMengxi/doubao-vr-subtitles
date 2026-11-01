@@ -26,6 +26,9 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="[1.7.250606001]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.26100.7705]" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="[1.7.251221100]" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="[2.0.1]" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="[2.0.1]" />
+    <PackageReference Include="NAudio.WinMM" Version="[2.2.1]" />
     <Content Include="..\assets\bridge.ico" Link="bridge.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\assets\steamvr\*.json" Link="steamvr\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\LICENSE" Link="licenses\GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

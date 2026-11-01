@@ -543,6 +543,7 @@ private:
                     if (awaiting_rebind_frame) {
                         awaiting_rebind_frame = false;
                         is_restarting.store(false);
+                        last_frame = now - std::chrono::milliseconds(50);
                     }
                     pending = true;
                     ++serial;

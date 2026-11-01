@@ -77,7 +77,7 @@ try {
         if (-not $runtimeRoot) { throw 'Pinned .NET runtime license source was not found.' }
         Copy-Item -LiteralPath (Join-Path $runtimeRoot 'LICENSE.TXT') -Destination (Join-Path $licenseRoot 'DotNet-LICENSE.txt')
         Copy-Item -LiteralPath (Join-Path $runtimeRoot 'THIRD-PARTY-NOTICES.TXT') -Destination (Join-Path $licenseRoot 'DotNet-THIRD-PARTY-NOTICES.txt')
-        Get-ChildItem -LiteralPath $stagingRoot -File -Recurse | Get-FileHash -Algorithm SHA256 | ForEach-Object {
+        Get-ChildItem -LiteralPath $stagingRoot -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' | Get-FileHash -Algorithm SHA256 | ForEach-Object {
             '{0}  {1}' -f $_.Hash, $_.Path.Substring($stagingRoot.Length + 1)
         } | Set-Content -LiteralPath (Join-Path $stagingRoot 'SHA256SUMS.txt') -Encoding utf8
         if (Test-Path -LiteralPath $applicationRoot) {

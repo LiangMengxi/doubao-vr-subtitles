@@ -10,6 +10,7 @@ if (Test-Path -LiteralPath (Join-Path $rewriteRoot 'installer')) { $files += Get
 $files += Get-ChildItem -LiteralPath $rewriteRoot -File
 $rootFiles = @('.gitattributes','.gitignore','LICENSE','README.md','docs\RELEASE_NOTES.md','docs\RELEASING.md','docs\REFERENCES.md','docs\SOURCE_BUILD.md','THIRD_PARTY_NOTICES.md','docs\USAGE.md','VERSION','scripts\build.ps1','scripts\package-release.ps1','scripts\start.cmd','licenses\README.md','licenses\InnoSetup-LICENSE.txt','licenses\OpenVR-LICENSE.txt')
 $files += $rootFiles | ForEach-Object { Get-Item -LiteralPath (Join-Path $repositoryRoot $_) }
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open((Join-Path $backupRoot 'source.zip'), [IO.Compression.ZipArchiveMode]::Create)
 $manifest = @()

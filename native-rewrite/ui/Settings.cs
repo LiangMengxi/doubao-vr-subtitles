@@ -11,9 +11,11 @@ internal sealed class Settings
     public const int FullSupportBuild = 22000;
     public static int OsBuild => Environment.OSVersion.Version.Build;
     public static bool IsBelowFullSupport => OsBuild < FullSupportBuild;
-    public static string CurrentAppVersion => typeof(Settings).Assembly.GetName().Version?.ToString() ?? "0.4.2";
-    public static string CompatibilityPromptText =>
-        $"系统版本（当前 Build {OsBuild}）低于 Build {FullSupportBuild}，兼容模式，部分功能不可用";
+    public static string CurrentAppVersion => typeof(Settings).Assembly.GetName().Version?.ToString() ?? "0.5.0";
+    public static string FormatCompatibilityPrompt(int osBuild) => osBuild < FullSupportBuild
+        ? $"系统版本（当前 Build {osBuild}）低于 Build {FullSupportBuild}，兼容模式，部分功能不可用"
+        : $"已手动开启兼容模式（当前 Build {osBuild}），部分功能不可用";
+    public static string CompatibilityPromptText => FormatCompatibilityPrompt(OsBuild);
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DoubaoVR.Native");
     private static string FilePath => Path.Combine(DataDirectory, "settings.json");
     public static string? LoadWarning { get; private set; }
@@ -48,6 +50,10 @@ internal sealed class Settings
     [JsonPropertyName("assistant_auto_attach")] public bool AssistantAutoAttach { get; set; } = true;
     [JsonPropertyName("assistant_width")] public float AssistantWidth { get; set; } = .7f;
     [JsonPropertyName("assistant_reset_on_dashboard"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool AssistantResetOnDashboard { get; set; }
+    [JsonPropertyName("vrchat_osc_enabled")] public bool VrchatOscEnabled { get; set; }
+    [JsonPropertyName("vrchat_osc_language")] public string VrchatOscLanguage { get; set; } = "en";
+    [JsonPropertyName("vrchat_osc_bilingual")] public bool VrchatOscBilingual { get; set; } = true;
+    [JsonPropertyName("vrchat_osc_sound")] public bool VrchatOscSound { get; set; } = true;
     [JsonIgnore] public bool EffectiveCompatibilityMode => IsBelowFullSupport || CompatibilityMode;
     [JsonIgnore] public bool EffectiveBorder => EffectiveCompatibilityMode || Border;
 
@@ -97,6 +103,7 @@ internal sealed class Settings
         if (AudioTargetName is null || AudioTargetName.Length > 255) AudioTargetName = "";
         if (MicrophoneTargetId is null || MicrophoneTargetId.Length >= 512 || MicrophoneTargetId.Contains('\0')) MicrophoneTargetId = "";
         if (MicrophoneTargetName is null || MicrophoneTargetName.Length > 255) MicrophoneTargetName = "";
+        if (VrchatOscLanguage is not ("en" or "ja" or "ko")) VrchatOscLanguage = "en";
     }
 
     private static float Limit(float value, float minimum, float maximum, float fallback) =>

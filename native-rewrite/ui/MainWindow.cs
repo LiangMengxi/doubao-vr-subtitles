@@ -30,11 +30,17 @@ internal sealed partial class MainWindow : Window
     private readonly ToggleSwitch compatibilityToggle = new() { Header = "兼容模式" };
     private readonly TextBlock compatibilityNotice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75, Visibility = Visibility.Collapsed };
     private readonly ToggleSwitch autoRestartToggle = new() { Header = "定时自动重启字幕窗口" };
+    private readonly SpeechTranslationService speechTranslator = new();
+    private readonly ToggleSwitch vrchatOscToggle = new() { Header = "启用麦克风同传到 VRChat (OSC)" };
+    private readonly ComboBox vrchatOscLangCombo = new() { Header = "目标语言", HorizontalAlignment = HorizontalAlignment.Stretch };
+    private readonly ToggleSwitch vrchatOscBilingualToggle = new() { Header = "双语显示 (英文+中文)" };
+    private readonly ToggleSwitch vrchatOscSoundToggle = new() { Header = "发送提示音" };
+    private readonly TextBlock vrchatOscStatus = new() { Text = "未启用", FontSize = 12, Opacity = .75, TextWrapping = TextWrapping.Wrap };
     private readonly byte[] previewBuffer = new byte[640 * 240 * 4];
     private readonly PreviewBuffer nativePreview = new();
     private BridgeHandle? bridge;
     private CaptionWindow? connected;
-    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr, syncingCompatibility;
+    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr, syncingCompatibility, syncingVrchatOsc;
     private int selectedPage;
     private ulong previewSequence;
     private WriteableBitmap? bitmap;
@@ -223,8 +229,84 @@ internal sealed partial class MainWindow : Window
             value => { settings.AutoRestartIntervalMinutes = (float)Math.Round(value); ResetAutoRestartSchedule(); },
             value => value <= 0 ? "已停用（0 分钟）" : $"{value:F0} 分钟", ("15分", 15), ("30分", 30), ("60分", 60)));
         appearance.Children.Add(BackgroundSettings());
+        var vrchatOscCard = Column(8);
+        vrchatOscCard.Children.Add(new TextBlock { Text = "说话自动翻译并通过 OSC 推送至 VRChat 头顶聊天框（需在 VRChat Action 菜单开启 OSC）。", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75 });
+        vrchatOscToggle.IsOn = settings.VrchatOscEnabled;
+        vrchatOscLangCombo.ItemsSource = new[] { "英语 (English)", "日语 (Japanese)", "韩语 (Korean)" };
+        vrchatOscLangCombo.SelectedIndex = settings.VrchatOscLanguage switch { "ja" => 1, "ko" => 2, _ => 0 };
+        vrchatOscBilingualToggle.IsOn = settings.VrchatOscBilingual;
+        vrchatOscSoundToggle.IsOn = settings.VrchatOscSound;
+        vrchatOscCard.Children.Add(vrchatOscToggle);
+        vrchatOscCard.Children.Add(vrchatOscLangCombo);
+        vrchatOscCard.Children.Add(vrchatOscBilingualToggle);
+        vrchatOscCard.Children.Add(vrchatOscSoundToggle);
+        vrchatOscCard.Children.Add(vrchatOscStatus);
+        
+        Action updateOscConfig = () =>
+        {
+            string targetLang = vrchatOscLangCombo.SelectedIndex switch { 1 => "ja", 2 => "ko", _ => "en" };
+            settings.VrchatOscLanguage = targetLang;
+            settings.VrchatOscBilingual = vrchatOscBilingualToggle.IsOn;
+            settings.VrchatOscSound = vrchatOscSoundToggle.IsOn;
+            speechTranslator.Configure(targetLang, settings.VrchatOscBilingual, settings.VrchatOscSound,
+                (spoken, trans) => DispatcherQueue.TryEnqueue(() => vrchatOscStatus.Text = $"已发送: {trans} ({spoken})"),
+                msg => DispatcherQueue.TryEnqueue(() => vrchatOscStatus.Text = msg));
+            ApplyConfiguration();
+        };
+
+        vrchatOscToggle.Toggled += async (_, _) =>
+        {
+            if (syncingVrchatOsc) return;
+            settings.VrchatOscEnabled = vrchatOscToggle.IsOn;
+            ApplyConfiguration();
+            updateOscConfig();
+            if (vrchatOscToggle.IsOn)
+            {
+                vrchatOscStatus.Text = "正在启动麦克风监听…";
+                bool ok = await speechTranslator.StartAsync();
+                if (!ok && !speechTranslator.IsListening)
+                {
+                    syncingVrchatOsc = true;
+                    try
+                    {
+                        vrchatOscToggle.IsOn = false;
+                    }
+                    finally
+                    {
+                        syncingVrchatOsc = false;
+                    }
+                }
+            }
+            else
+            {
+                await speechTranslator.StopAsync();
+            }
+        };
+        vrchatOscLangCombo.SelectionChanged += (_, _) => updateOscConfig();
+        vrchatOscBilingualToggle.Toggled += (_, _) => updateOscConfig();
+        vrchatOscSoundToggle.Toggled += (_, _) => updateOscConfig();
+        updateOscConfig();
+
+        if (settings.VrchatOscEnabled && !smokeTest)
+        {
+            vrchatOscStatus.Text = "正在启动麦克风监听…";
+            _ = DispatcherQueue.TryEnqueue(async () =>
+            {
+                bool ok = await speechTranslator.StartAsync();
+                if (!ok && !speechTranslator.IsListening)
+                {
+                    syncingVrchatOsc = true;
+                    try { vrchatOscToggle.IsOn = false; }
+                    finally { syncingVrchatOsc = false; }
+                    settings.VrchatOscEnabled = false;
+                    ApplyConfiguration();
+                }
+            });
+        }
+
         preferences.Children.Add(SettingsSection("主题与背景", appearance));
         preferences.Children.Add(SettingsSection("字幕捕获", sourceCard));
+        preferences.Children.Add(SettingsSection("VRChat 聊天框同步 (OSC)", vrchatOscCard));
         preferences.Children.Add(SettingsSection("程序设置", behavior));
         preferences.Children.Add(SettingsSection("关于", AboutSettings()));
         var pageHost = new Grid();
@@ -560,6 +642,7 @@ internal sealed partial class MainWindow : Window
         status.Text = "正在移除 VR 悬浮并退出…";
         try
         {
+            await speechTranslator.DisposeAsync();
             await preferences.StopAsync();
             await StopAssistantAsync(true);
             await operations.WaitAsync();

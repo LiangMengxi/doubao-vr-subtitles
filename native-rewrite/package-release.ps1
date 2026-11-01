@@ -88,11 +88,16 @@ $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
     if ($archive.Entries.Count -ne $checksums.Count + 1) { throw 'ZIP entry count mismatch.' }
     foreach ($entry in $archive.Entries) {
-        if (-not $entry.FullName.StartsWith('DoubaoVR/') -or $entry.FullName -match '\.md$|(^|/)(settings[^/]*|logs|artifacts|backups|dependencies|\.env[^/]*)(/|$)') { throw 'Unexpected ZIP entry.' }
+        $normalizedName = $entry.FullName.Replace('\', '/')
+        if (-not $normalizedName.StartsWith('DoubaoVR/') -or $normalizedName -match '\.md$|(^|/)(settings[^/]*|logs|artifacts|backups|dependencies|\.env[^/]*)(/|$)') { throw 'Unexpected ZIP entry.' }
         $stream = $entry.Open()
         try {
-            $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream))
-            if ($digest -ne (Get-FileHash -LiteralPath (Join-Path $stage $entry.FullName)).Hash) { throw 'ZIP content mismatch.' }
+            $hasher = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $hashBytes = $hasher.ComputeHash($stream)
+                $digest = -join ($hashBytes | ForEach-Object { $_.ToString("X2") })
+                if ($digest -ne (Get-FileHash -LiteralPath (Join-Path $stage $normalizedName)).Hash) { throw 'ZIP content mismatch.' }
+            } finally { $hasher.Dispose() }
         } finally { $stream.Dispose() }
     }
 } finally { $archive.Dispose() }

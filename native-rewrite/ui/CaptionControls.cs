@@ -48,15 +48,33 @@ internal sealed partial class MainWindow
             RefreshSources(newWindow.Handle);
             captions.SyncTarget(newWindow);
             connected = newWindow;
+            ulong baselineFrames = NativeBridge.Stats(bridge).Frames;
             Marshal.ThrowExceptionForHR(NativeBridge.RebindWindow(bridge, (nuint)newWindow.Handle));
-            var settleDeadline = DateTime.UtcNow.AddMilliseconds(1500);
+            bool frameReceived = false;
+            var settleDeadline = DateTime.UtcNow.AddMilliseconds(5000);
             while (DateTime.UtcNow < settleDeadline && !shuttingDown)
             {
                 await Task.Delay(50, lifetime.Token);
-                if (NativeBridge.Stats(bridge).State == 2) break;
+                var currentStats = NativeBridge.Stats(bridge);
+                if (currentStats.State == 3)
+                    throw new InvalidOperationException(NativeBridge.Error(bridge));
+                if (currentStats.State == 2 && currentStats.Frames > baselineFrames)
+                {
+                    frameReceived = true;
+                    break;
+                }
             }
             NativeBridge.SetRestarting(bridge, 0);
-            Log.Write($"Auto-restarted caption window seamlessly: old={oldWindow.Handle}, new={newWindow.Handle}.");
+            if (frameReceived)
+            {
+                status.Text = vrEnabled ? "VR字幕运行中" : "桌面预览运行中";
+                Log.Write($"Auto-restarted caption window seamlessly: old={oldWindow.Handle}, new={newWindow.Handle}.");
+            }
+            else if (!shuttingDown)
+            {
+                status.Text = "字幕窗口已重启，正在等待新画面…";
+                Log.Write($"Auto-restarted caption window (first frame pending): old={oldWindow.Handle}, new={newWindow.Handle}.");
+            }
         }
         catch (OperationCanceledException) when (shuttingDown)
         {

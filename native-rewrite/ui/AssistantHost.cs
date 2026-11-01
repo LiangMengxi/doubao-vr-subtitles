@@ -276,3 +276,31 @@ internal sealed class AssistantHost
         return 0;
     }
 }
+
+internal sealed partial class MainWindow
+{
+    internal static bool HasInputRegionChanged(byte[] before, uint beforeW, uint beforeH, byte[] after, uint afterW, uint afterH)
+    {
+        if (before.Length == 0 || after.Length == 0 || beforeW == 0 || beforeH == 0 || afterW == 0 || afterH == 0) return false;
+        if (beforeW != afterW || beforeH != afterH) return true;
+        int stride = (int)afterW * 4;
+        if (before.Length < stride * (int)afterH || after.Length < stride * (int)afterH) return false;
+        int startY = (int)(afterH * 55 / 100);
+        int changedPixels = 0;
+        for (int y = startY; y < (int)afterH; ++y)
+        {
+            int rowOffset = y * stride;
+            for (int x = 0; x < (int)afterW; ++x)
+            {
+                int idx = rowOffset + x * 4;
+                if (Math.Abs(before[idx] - after[idx]) > 12 ||
+                    Math.Abs(before[idx + 1] - after[idx + 1]) > 12 ||
+                    Math.Abs(before[idx + 2] - after[idx + 2]) > 12)
+                {
+                    if (++changedPixels >= 48) return true;
+                }
+            }
+        }
+        return false;
+    }
+}

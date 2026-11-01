@@ -5,6 +5,10 @@ The original application implementation is licensed under GNU GPL version 3 only
 - OpenVR SDK: Valve, BSD 3-Clause license. Pinned to commit `91825305130f446f82054c1ec3d416321ace0072`. The runtime DLL and exact `OpenVR-LICENSE.txt` are included with the application.
 - .NET runtime: Microsoft and contributors. Runtime license and third-party notices are copied from the exact NuGet runtime package into `out/app/licenses/` when publishing.
 - Windows App SDK / WinUI 3: Microsoft. `license.txt` and `NOTICE.txt` from Microsoft.WindowsAppSDK 1.7.250606001 are copied into `out/app/licenses/` when publishing.
+- org.k2fsa.sherpa.onnx: Next-gen Kaldi / k2-fsa, Apache-2.0 license. Offline speech recognition and voice activity detection runtime based on ONNX Runtime.
+- NAudio / NAudio.WinMM: Mark Heath and contributors, MIT license. Managed WinMM wrapper for low-latency microphone audio streaming without COM interop.
+- SenseVoice-Small: Alibaba Inc. / FunASR, Apache-2.0 license. Multilingual speech recognition model, downloaded on demand.
+- Silero VAD: Silero Team, MIT license. Voice activity detector model, downloaded on demand.
 - CMake, MSVC, Windows SDK and SDK build tools are build-time dependencies. They remain in the local dependency cache and are not copied into the application payload by this project.
 
 The application icon is reused from this project's original assets. No Python runtime, Python packages, or Tcl/Tk resources are bundled in this rewrite.
