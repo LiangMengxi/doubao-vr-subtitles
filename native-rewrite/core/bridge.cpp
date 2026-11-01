@@ -71,8 +71,21 @@ public:
         : runtime_lock(openvr_mutex, std::try_to_lock) {
         if (!runtime_lock.owns_lock()) throw hresult_error(E_UNEXPECTED, L"已有 VR 悬浮连接，请先关闭原连接。");
         vr::EVRInitError error = vr::VRInitError_None;
-        vr::VR_Init(&error, vr::VRApplication_Overlay);
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            error = vr::VRInitError_None;
+            vr::VR_Init(&error, vr::VRApplication_Overlay);
+            if (error == vr::VRInitError_None) break;
+            if (error == vr::VRInitError_Driver_WirelessHmdNotConnected ||
+                error == vr::VRInitError_Init_HmdNotFoundPresenceFailed) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                continue;
+            }
+            break;
+        }
         if (error != vr::VRInitError_None) {
+            if (error == vr::VRInitError_Driver_WirelessHmdNotConnected) {
+                throw hresult_error(E_FAIL, L"无法连接 SteamVR：无线头显驱动未建立连接 (215)。如果您正在头显中串流，通常是因为 SteamVR 中存在闲置或冲突的无线驱动（如 AMD ReLive VR、旧版串流驱动），请在 SteamVR 设置 -> 启动/开发者 -> 管理外设驱动 中禁用闲置驱动后重试。");
+            }
             throw hresult_error(E_FAIL, L"无法连接 SteamVR：" + to_hstring(vr::VR_GetVRInitErrorAsEnglishDescription(error)));
         }
         initialized = true;
@@ -140,6 +153,11 @@ public:
         return change == OverlayCurvature::Change::updated;
     }
     const OverlayCurvature& curvature() const noexcept { return curved; }
+    bool is_standby() const noexcept {
+        if (!vr::VRSystem()) return false;
+        const auto level = vr::VRSystem()->GetTrackedDeviceActivityLevel(vr::k_unTrackedDeviceIndex_Hmd);
+        return level == vr::k_EDeviceActivityLevel_Standby || level == vr::k_EDeviceActivityLevel_UserInteraction_Timeout;
+    }
     void submit(const com_ptr<ID3D11Texture2D>& texture, const com_ptr<ID3D11DeviceContext>& context) {
         std::unique_lock visibility_lock(visibility, std::defer_lock);
         if (assistant) {
@@ -148,9 +166,17 @@ public:
             texture->GetDesc(&description);
             assistant->dimensions(description.Width, description.Height);
         }
-        overlay_check(static_cast<vr::EVROverlayError>(platform::submit_overlay(handle, texture, context)));
+        const auto submit_result = static_cast<vr::EVROverlayError>(platform::submit_overlay(handle, texture, context));
+        if (submit_result != vr::VROverlayError_None) {
+            if (is_standby()) return;
+            overlay_check(submit_result);
+        }
         if (assistant && assistant->suppressed()) return;
-        overlay_check(vr::VROverlay()->ShowOverlay(handle));
+        const auto show_result = vr::VROverlay()->ShowOverlay(handle);
+        if (show_result != vr::VROverlayError_None) {
+            if (is_standby()) return;
+            overlay_check(show_result);
+        }
     }
     void hide() { overlay_check(vr::VROverlay()->HideOverlay(handle)); }
     void reset_assistant_position() noexcept { if (assistant) assistant->reset_position(); }
@@ -159,8 +185,16 @@ public:
         vr::VREvent_t event{};
         for (int count = 0; count < 32 && vr::VROverlay()->PollNextOverlayEvent(handle, &event, sizeof(event)); ++count) {
             if (event.eventType == vr::VREvent_Quit) {
-                vr::VRSystem()->AcknowledgeQuit_Exiting();
+                if (vr::VRSystem()) vr::VRSystem()->AcknowledgeQuit_Exiting();
                 return true;
+            }
+        }
+        if (vr::VRSystem()) {
+            for (int count = 0; count < 32 && vr::VRSystem()->PollNextEvent(&event, sizeof(event)); ++count) {
+                if (event.eventType == vr::VREvent_Quit || event.eventType == vr::VREvent_ProcessQuit) {
+                    vr::VRSystem()->AcknowledgeQuit_Exiting();
+                    return true;
+                }
             }
         }
         return false;
@@ -318,7 +352,19 @@ private:
         is_restarting.store(false);
         pending_rebind_window.store(0);
         signal->wake();
-        if (worker.joinable()) worker.join();
+        if (worker.joinable()) {
+            HANDLE thread_handle = reinterpret_cast<HANDLE>(worker.native_handle());
+            if (thread_handle) {
+                DWORD wait_result = WaitForSingleObject(thread_handle, 2000);
+                if (wait_result == WAIT_OBJECT_0) {
+                    worker.join();
+                } else {
+                    worker.detach();
+                }
+            } else {
+                worker.join();
+            }
+        }
         std::lock_guard lock(mutex);
         stats.state = 0;
         stats.curvature_fallback = 0;
@@ -370,9 +416,28 @@ private:
         auto bind_window = [&](HWND target_window, SizeInt32& current_size) {
             lifetime.reset();
             stage = L"创建目标窗口捕获对象（CreateForWindow）";
-            check_hresult(interop->CreateForWindow(target_window, guid_of<GraphicsCaptureItem>(), put_abi(lifetime.item)));
+            if (!IsWindow(target_window)) throw hresult_error(E_INVALIDARG, L"目标窗口句柄无效或已被关闭。");
+            HWND root = GetAncestor(target_window, GA_ROOT);
+            if (root && IsWindow(root)) {
+                target_window = root;
+            }
+            HRESULT hr = E_FAIL;
+            for (int attempt = 0; attempt < 20 && !stopping; ++attempt) {
+                if (!IsWindow(target_window)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                hr = interop->CreateForWindow(target_window, guid_of<GraphicsCaptureItem>(), put_abi(lifetime.item));
+                if (SUCCEEDED(hr) && lifetime.item) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            check_hresult(hr);
             stage = L"读取目标窗口捕获尺寸";
             current_size = lifetime.item.Size();
+            for (int attempt = 0; attempt < 15 && (current_size.Width <= 0 || current_size.Height <= 0) && !stopping; ++attempt) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                current_size = lifetime.item.Size();
+            }
             if (current_size.Width <= 0 || current_size.Height <= 0 || static_cast<uint64_t>(current_size.Width) * current_size.Height > 16 * 1024 * 1024) {
                 throw hresult_error(E_OUTOFMEMORY, L"捕获窗口尺寸不受支持，请缩小字幕窗口。");
             }

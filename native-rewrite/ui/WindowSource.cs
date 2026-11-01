@@ -53,6 +53,7 @@ internal static class WindowSource
     [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, nint parameter);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(nint hwnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(nint hwnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint hwnd, out Rect rect);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int cx, int cy, uint flags);
@@ -83,7 +84,21 @@ internal static class WindowSource
         var paths = new Dictionary<uint, string?>();
         EnumWindows((hwnd, _) =>
         {
-            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
+            if (IsIconic(hwnd))
+            {
+                if (includeAssistant)
+                {
+                    GetWindowThreadProcessId(hwnd, out var pid);
+                    if (!paths.TryGetValue(pid, out var p)) paths[pid] = p = Executable(pid);
+                    if (string.Equals(Path.GetFileName(p), "doubao.exe", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ShowWindow(hwnd, 9); // SW_RESTORE
+                    }
+                    else return true;
+                }
+                else return true;
+            }
+            if (!IsWindowVisible(hwnd)) return true;
             if (!includeAssistant && IsAssistant(hwnd)) return true;
             GetWindowThreadProcessId(hwnd, out var processId);
             if (!paths.TryGetValue(processId, out var path)) paths[processId] = path = Executable(processId);

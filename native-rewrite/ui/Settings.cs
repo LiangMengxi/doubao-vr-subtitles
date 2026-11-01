@@ -11,7 +11,7 @@ internal sealed class Settings
     public const int FullSupportBuild = 22000;
     public static int OsBuild => Environment.OSVersion.Version.Build;
     public static bool IsBelowFullSupport => OsBuild < FullSupportBuild;
-    public static string CurrentAppVersion => typeof(Settings).Assembly.GetName().Version?.ToString() ?? "0.5.0";
+    public static string CurrentAppVersion => typeof(Settings).Assembly.GetName().Version?.ToString() ?? "0.5.1";
     public static string FormatCompatibilityPrompt(int osBuild) => osBuild < FullSupportBuild
         ? $"系统版本（当前 Build {osBuild}）低于 Build {FullSupportBuild}，兼容模式，部分功能不可用"
         : $"已手动开启兼容模式（当前 Build {osBuild}），部分功能不可用";

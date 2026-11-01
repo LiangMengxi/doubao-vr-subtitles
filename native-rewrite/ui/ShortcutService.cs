@@ -70,8 +70,15 @@ internal static class ShortcutService
                 var root = document.RootElement;
                 foreach (var name in new[] { "launcher", "quick_desk", "summon" })
                 {
+                    if (root.TryGetProperty("shortcut." + name, out var s1))
+                    {
+                        if (s1.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.False) continue;
+                        var cfg = s1.TryGetProperty("key", out var k) ? k.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(cfg)) return Parse(cfg);
+                    }
                     if (root.TryGetProperty("saman.shortcut." + name, out var setting)
-                        || (root.TryGetProperty("saman", out var saman) && saman.TryGetProperty("shortcut", out var shortcuts) && shortcuts.TryGetProperty(name, out setting)))
+                        || (root.TryGetProperty("saman", out var saman) && saman.TryGetProperty("shortcut", out var shortcuts) && shortcuts.TryGetProperty(name, out setting))
+                        || (root.TryGetProperty("shortcut", out var directShortcuts) && directShortcuts.TryGetProperty(name, out setting)))
                     {
                         if (setting.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False) continue;
                         var configured = setting.TryGetProperty("key", out var keyElement) ? keyElement.GetString() : null;
@@ -113,9 +120,44 @@ internal static class ShortcutService
             string candidate = command.StartsWith('"') ? command.Split('"')[1] : command.Split(' ')[0];
             if (string.Equals(Path.GetFileName(candidate), "doubao.exe", StringComparison.OrdinalIgnoreCase) && File.Exists(candidate)) return candidate;
         }
-        var fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Doubao", "Application", "Doubao.exe");
-        if (File.Exists(fallback)) return fallback;
-        throw new InvalidOperationException("未找到豆包桌面版，请先安装并登录。");
+        foreach (var candidate in new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Doubao", "Application", "Doubao.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Doubao", "Doubao.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Doubao", "Doubao.exe"),
+            @"D:\APP\Doubao\Doubao.exe"
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+        throw new InvalidOperationException("未找到豆包桌面版，请先安装并启动豆包。");
+    }
+
+    private static async Task SendKeysAsync(ushort[] keys, CancellationToken cancellation)
+    {
+        if (keys == null || keys.Length == 0) return;
+        // Press modifiers down
+        for (int i = 0; i < keys.Length - 1; i++)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            SendInput(1, new[] { Key(keys[i], false) }, Marshal.SizeOf<Input>());
+            await Task.Delay(20, cancellation);
+        }
+        // Press main key down
+        cancellation.ThrowIfCancellationRequested();
+        SendInput(1, new[] { Key(keys[^1], false) }, Marshal.SizeOf<Input>());
+        await Task.Delay(50, cancellation);
+        // Release main key up
+        cancellation.ThrowIfCancellationRequested();
+        SendInput(1, new[] { Key(keys[^1], true) }, Marshal.SizeOf<Input>());
+        await Task.Delay(20, cancellation);
+        // Release modifiers up (in reverse order)
+        for (int i = keys.Length - 2; i >= 0; i--)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            SendInput(1, new[] { Key(keys[i], true) }, Marshal.SizeOf<Input>());
+            await Task.Delay(20, cancellation);
+        }
     }
 
     public static async Task<bool> CloseForRestartAsync(CaptionWindow target, CancellationToken cancellation)
@@ -147,17 +189,8 @@ internal static class ShortcutService
                 if (!WindowSource.Same(target)) return true;
                 if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
                 {
-                    var events = keys.Select(key => Key(key, false)).Concat(keys.Reverse().Select(key => Key(key, true))).ToArray();
-                    if (SendInput((uint)events.Length, events, Marshal.SizeOf<Input>()) == events.Length)
-                    {
-                        sent = true;
-                    }
-                    else
-                    {
-                        var releases = keys.Reverse().Select(key => Key(key, true)).ToArray();
-                        SendInput((uint)releases.Length, releases, Marshal.SizeOf<Input>());
-                        break;
-                    }
+                    await SendKeysAsync(keys, cancellation);
+                    sent = true;
                 }
                 await Task.Delay(120, cancellation);
             }
@@ -189,16 +222,15 @@ internal static class ShortcutService
         {
             cancellation.ThrowIfCancellationRequested();
             var caption = CaptionController.Find(WindowSource.Discover());
-            if (caption != null) return caption;
+            if (caption != null)
+            {
+                // Settling delay: allow Chromium to finish attaching swapchain & composition visual to HWND
+                await Task.Delay(200, cancellation);
+                return caption;
+            }
             if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
             {
-                var events = keys.Select(key => Key(key, false)).Concat(keys.Reverse().Select(key => Key(key, true))).ToArray();
-                if (SendInput((uint)events.Length, events, Marshal.SizeOf<Input>()) != events.Length)
-                {
-                    var releases = keys.Reverse().Select(key => Key(key, true)).ToArray();
-                    SendInput((uint)releases.Length, releases, Marshal.SizeOf<Input>());
-                    throw new InvalidOperationException("无法发送快捷键，请确认豆包与字幕桥以相同权限运行。");
-                }
+                await SendKeysAsync(keys, cancellation);
                 sent = true;
             }
             await Task.Delay(200, cancellation);
@@ -225,7 +257,8 @@ internal static class ShortcutService
         }
         var startedAt = DateTime.UtcNow;
         var deadline = startedAt.AddSeconds(12);
-        bool sent = false;
+        DateTime nextKeySend = DateTime.UtcNow;
+        int sendCount = 0;
         while (DateTime.UtcNow < deadline)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -235,26 +268,29 @@ internal static class ShortcutService
                 .OrderByDescending(window => !initialHandles.Contains(window.Handle))
                 .ThenByDescending(window => window.AssistantScore)
                 .FirstOrDefault();
-            if (opened != null) return opened;
-            if (sent && DateTime.UtcNow - startedAt > TimeSpan.FromSeconds(2.5))
+            if (opened != null)
+            {
+                await Task.Delay(200, cancellation);
+                return opened;
+            }
+            if (sendCount > 0 && DateTime.UtcNow - startedAt > TimeSpan.FromSeconds(2.0))
             {
                 var fallback = FindAssistant(discovered, excludeHandle, requireCompact: false);
-                if (fallback != null) return fallback;
-            }
-            if (!sent && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
-            {
-                var events = keys.Select(key => Key(key, false)).Concat(keys.Reverse().Select(key => Key(key, true))).ToArray();
-                if (SendInput((uint)events.Length, events, Marshal.SizeOf<Input>()) != events.Length)
+                if (fallback != null)
                 {
-                    var releases = keys.Reverse().Select(key => Key(key, true)).ToArray();
-                    SendInput((uint)releases.Length, releases, Marshal.SizeOf<Input>());
-                    throw new InvalidOperationException("无法发送浮窗快捷键，请确认豆包与本程序以相同权限运行。");
+                    await Task.Delay(200, cancellation);
+                    return fallback;
                 }
-                sent = true;
+            }
+            if (DateTime.UtcNow >= nextKeySend && sendCount < 3 && !new[] { 0x10, 0x11, 0x12, 0x5b, 0x5c }.Any(key => (GetAsyncKeyState(key) & 0x8000) != 0))
+            {
+                await SendKeysAsync(keys, cancellation);
+                sendCount++;
+                nextKeySend = DateTime.UtcNow.AddSeconds(2.5);
             }
             await Task.Delay(150, cancellation);
         }
-        throw new TimeoutException("未能自动唤起豆包浮窗，请确认豆包已登录。");
+        throw new TimeoutException("未能自动唤起豆包浮窗。请确认豆包已在后台运行；您可以手动按下豆包唤起快捷键（默认 Alt+Space）或在豆包托盘中打开浮窗，然后点击“刷新窗口”后重试。");
     }
 
     private static Input Key(ushort key, bool release) => new()

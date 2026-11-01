@@ -805,9 +805,9 @@ void register_steamvr(std::wstring_view manifest, bool installed, bool auto_laun
 
 uint32_t submit_overlay(uint64_t handle, const winrt::com_ptr<ID3D11Texture2D>& texture,
     const winrt::com_ptr<ID3D11DeviceContext>& context) {
+    if (context) context->Flush();
     vr::Texture_t descriptor{texture.get(), vr::TextureType_DirectX, vr::ColorSpace_Auto};
     auto result = vr::VROverlay()->SetOverlayTexture(handle, &descriptor);
-    context->Flush();
     return static_cast<uint32_t>(result);
 }
 winrt::com_ptr<ID3DBlob> compile_shader(std::string_view source, std::string_view entry, std::string_view profile) {

@@ -467,7 +467,7 @@ internal sealed partial class MainWindow : Window
     private async Task ConfigureAsync()
     {
         if (!running || bridge == null || shuttingDown) return;
-        await operations.WaitAsync();
+        if (!await operations.WaitAsync(TimeSpan.FromMilliseconds(500))) return;
         try
         {
             if (shuttingDown || !running) return;
@@ -501,7 +501,10 @@ internal sealed partial class MainWindow : Window
         if (sources.SelectedItem is not CaptionWindow source) throw new InvalidOperationException("请先打开豆包字幕并选择捕获来源。");
         if (!WindowSource.Same(source)) throw new InvalidOperationException("字幕来源窗口已变化，请刷新来源后重新选择。");
         var options = settings.Options(enableVr, previewVisible);
-        await operations.WaitAsync();
+        if (!await operations.WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+            throw new TimeoutException("操作正在进行中，请稍候重试。");
+        }
         try
         {
             if (shuttingDown || captions.IsClosing || requestedEpoch != captureEpoch) return;
@@ -529,7 +532,10 @@ internal sealed partial class MainWindow : Window
     private async Task StopAsync()
     {
         ++captureEpoch;
-        await operations.WaitAsync();
+        if (!await operations.WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+            throw new TimeoutException("停止操作超时，请重试。");
+        }
         try
         {
             if (bridge != null) await Task.Run(() => NativeBridge.Stop(bridge));
@@ -645,9 +651,22 @@ internal sealed partial class MainWindow : Window
             await speechTranslator.DisposeAsync();
             await preferences.StopAsync();
             await StopAssistantAsync(true);
-            await operations.WaitAsync();
-            try { if (bridge != null) await Task.Run(() => bridge.Dispose()); }
-            finally { operations.Release(); }
+            bool acquired = await operations.WaitAsync(TimeSpan.FromSeconds(2));
+            try
+            {
+                if (bridge != null)
+                {
+                    var disposeTask = Task.Run(() => bridge.Dispose());
+                    if (await Task.WhenAny(disposeTask, Task.Delay(2000)) != disposeTask)
+                    {
+                        Log.Write("Warning: Native core dispose timed out during shutdown.");
+                    }
+                }
+            }
+            finally
+            {
+                if (acquired) operations.Release();
+            }
             Log.Write("Native core release completed.");
             try { await backgroundImport; } catch (Exception exception) { Log.Write(exception.ToString()); }
             try { await PersistSettingsAsync(); } catch (Exception exception) { Log.Write(exception.ToString()); }
