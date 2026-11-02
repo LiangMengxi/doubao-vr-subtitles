@@ -7,7 +7,8 @@ $ErrorActionPreference = 'Stop'
 $rewriteRoot = $PSScriptRoot
 $repositoryRoot = Split-Path $rewriteRoot -Parent
 $version = (Get-Content -LiteralPath (Join-Path $repositoryRoot 'VERSION') -Raw).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION must contain three numeric components.' }
+if ($version -notmatch '^\d+\.\d+\.\d+([a-zA-Z0-9_-]+)?$') { throw 'VERSION must contain three numeric components with optional suffix.' }
+$numericVersion = [regex]::Match($version, '^\d+\.\d+\.\d+').Value
 $compiler = Get-Item -LiteralPath $Iscc
 if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) { $ReleaseDirectory = Join-Path $repositoryRoot $(if ($SourceBuild) { 'artifacts\source-build' } else { 'releases' }) }
 $releaseRoot = [IO.Path]::GetFullPath($ReleaseDirectory)
@@ -49,7 +50,7 @@ Copy-Item -LiteralPath (Join-Path $rewriteRoot 'THIRD_PARTY_NOTICES.md') -Destin
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'licenses\InnoSetup-LICENSE.txt') -Destination (Join-Path $payload 'licenses\InnoSetup-LICENSE.txt')
 foreach ($name in @('DoubaoVR.exe','DoubaoVR.Core.dll')) {
     $file = Get-Item -LiteralPath (Join-Path $payload $name)
-    if ($file.VersionInfo.ProductVersion -ne $version -or $file.VersionInfo.FileVersion -ne "$version.0") { throw "Incorrect application version: $name" }
+    if ($file.VersionInfo.ProductVersion -ne $version -or $file.VersionInfo.FileVersion -ne "$numericVersion.0") { throw "Incorrect application version: $name" }
 }
 foreach ($name in @('DoubaoVR.dll','DoubaoVR.deps.json','DoubaoVR.runtimeconfig.json','App.xbf','DoubaoVR.pri','openvr_api.dll','licenses\WindowsAppSDK-LICENSE.txt','licenses\DotNet-LICENSE.txt','licenses\GPL-3.0.txt','licenses\APPLICATION-NOTICE.txt','licenses\REFERENCES.txt','OpenVR-LICENSE.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "Missing runtime file: $name" }
@@ -101,10 +102,10 @@ try {
         } finally { $stream.Dispose() }
     }
 } finally { $archive.Dispose() }
-& $compiler.FullName /Q "/DAppVersion=$version" "/DPayloadDir=$payload" "/DReleaseDir=$releaseRoot" "/DVerificationFile=$verificationFile" (Join-Path $rewriteRoot 'installer\DoubaoVR.iss')
+& $compiler.FullName /Q "/DAppVersion=$version" "/DNumericVersion=$numericVersion" "/DPayloadDir=$payload" "/DReleaseDir=$releaseRoot" "/DVerificationFile=$verificationFile" (Join-Path $rewriteRoot 'installer\DoubaoVR.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 $installer = Get-Item -LiteralPath $installerPath
-if ($installer.VersionInfo.ProductVersion.Trim() -ne $version -or $installer.VersionInfo.FileVersion.Trim() -ne "$version.0" -or $installer.VersionInfo.FileDescription.Trim() -ne '豆包VR字幕安装程序') { throw 'Incorrect installer identity/version.' }
+if ($installer.VersionInfo.ProductVersion.Trim() -ne $version -or $installer.VersionInfo.FileVersion.Trim() -ne "$numericVersion.0" -or $installer.VersionInfo.FileDescription.Trim() -ne '豆包VR字幕安装程序') { throw 'Incorrect installer identity/version.' }
 foreach ($file in @($archivePath,$installerPath,$sourcePath)) {
     $digest = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
     "$digest  $(Split-Path $file -Leaf)" | Set-Content -LiteralPath ($file + '.sha256') -Encoding ascii

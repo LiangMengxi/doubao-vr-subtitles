@@ -27,8 +27,6 @@ internal sealed partial class MainWindow : Window
     private readonly Button vrButton = new() { Content = "开启VR", MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Button captureButton = new() { Content = "连接预览", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly ToggleSwitch borderToggle = new() { Header = "显示捕获黄框" };
-    private readonly ToggleSwitch compatibilityToggle = new() { Header = "兼容模式" };
-    private readonly TextBlock compatibilityNotice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75, Visibility = Visibility.Collapsed };
     private readonly ToggleSwitch autoRestartToggle = new() { Header = "定时自动重启字幕窗口" };
     private readonly SpeechTranslationService speechTranslator = new();
     private readonly ToggleSwitch vrchatOscToggle = new() { Header = "启用麦克风同传到 VRChat (OSC)" };
@@ -40,7 +38,7 @@ internal sealed partial class MainWindow : Window
     private readonly PreviewBuffer nativePreview = new();
     private BridgeHandle? bridge;
     private CaptionWindow? connected;
-    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr, syncingCompatibility, syncingVrchatOsc;
+    private bool running, vrEnabled, changingSources, shuttingDown, closeReady, previewVisible = true, tickBusy, reconnecting, reconnectVr, syncingVrchatOsc;
     private int selectedPage;
     private ulong previewSequence;
     private WriteableBitmap? bitmap;
@@ -56,7 +54,6 @@ internal sealed partial class MainWindow : Window
         bool versionChanged = !string.Equals(settings.CheckedAppVersion, Settings.CurrentAppVersion, StringComparison.Ordinal);
         if (versionChanged)
         {
-            if (Settings.IsBelowFullSupport) settings.CompatibilityMode = true;
             settings.CheckedAppVersion = Settings.CurrentAppVersion;
         }
         preferences = new(DispatcherQueue, ConfigureAsync, PersistSettingsAsync, PreferenceFailure);
@@ -95,7 +92,6 @@ internal sealed partial class MainWindow : Window
             NativeBridge.EnsureVersion();
             bridge = new BridgeHandle();
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
-            NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
         }
         catch (Exception exception) { Report(new InvalidOperationException("原生核心尚未就绪，请运行 build.ps1 完成构建。" + exception.Message)); }
         if (versionChanged) ApplyConfiguration();
@@ -215,13 +211,9 @@ internal sealed partial class MainWindow : Window
         theme.SelectionChanged += (_, _) => { settings.Appearance = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system"; ApplyTheme(); ApplyConfiguration(); };
         appearance.Children.Add(theme);
         appearance.Children.Add(ColorSettings());
-        borderToggle.IsOn = !settings.EffectiveCompatibilityMode && settings.Border;
+        borderToggle.IsOn = settings.Border;
         borderToggle.Toggled += async (_, _) => await UpdateCaptureBorderAsync(borderToggle.IsOn);
         sourceCard.Children.Add(borderToggle);
-        compatibilityToggle.IsOn = settings.EffectiveCompatibilityMode;
-        compatibilityToggle.Toggled += async (_, _) => await UpdateCompatibilityModeAsync(compatibilityToggle.IsOn);
-        sourceCard.Children.Add(compatibilityToggle);
-        sourceCard.Children.Add(compatibilityNotice);
         autoRestartToggle.IsOn = settings.AutoRestartCaptions;
         autoRestartToggle.Toggled += (_, _) => { settings.AutoRestartCaptions = autoRestartToggle.IsOn; ResetAutoRestartSchedule(); ApplyConfiguration(); };
         sourceCard.Children.Add(autoRestartToggle);
@@ -347,52 +339,6 @@ internal sealed partial class MainWindow : Window
         AddCell(footer, exit, 1);
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
-        UpdateCompatibilityUi();
-    }
-
-    private void UpdateCompatibilityUi()
-    {
-        bool compat = settings.EffectiveCompatibilityMode;
-        bool forced = Settings.IsBelowFullSupport;
-        string noticeText = Settings.CompatibilityPromptText;
-        syncingCompatibility = true;
-        syncingBorder = true;
-        try
-        {
-            compatibilityToggle.IsOn = compat;
-            compatibilityToggle.IsEnabled = !forced;
-            borderToggle.IsEnabled = !compat;
-            borderToggle.IsOn = !compat && settings.Border;
-            assistantBorder.IsEnabled = !compat;
-            assistantBorder.IsOn = !compat && settings.Border;
-            compatibilityNotice.Text = noticeText;
-            compatibilityNotice.Visibility = compat ? Visibility.Visible : Visibility.Collapsed;
-            assistantCompatibilityNotice.Text = noticeText;
-            assistantCompatibilityNotice.Visibility = compat ? Visibility.Visible : Visibility.Collapsed;
-        }
-        finally
-        {
-            syncingBorder = false;
-            syncingCompatibility = false;
-        }
-    }
-
-    private async Task UpdateCompatibilityModeAsync(bool enabled)
-    {
-        if (syncingCompatibility || shuttingDown) return;
-        if (Settings.IsBelowFullSupport)
-        {
-            UpdateCompatibilityUi();
-            return;
-        }
-        if (settings.CompatibilityMode == enabled) return;
-        settings.CompatibilityMode = enabled;
-        UpdateCompatibilityUi();
-        if (bridge != null) NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
-        ApplyConfiguration();
-        try { if (running) await StartAsync(vrEnabled); }
-        catch (Exception exception) { Report(exception); }
-        await ReconnectAssistantAsync();
     }
 
     private static Grid EqualColumns(int count)
@@ -512,8 +458,7 @@ internal sealed partial class MainWindow : Window
             UpdateCaptionControls();
             captureButton.IsEnabled = vrButton.IsEnabled = false;
             status.Text = "正在连接捕获…";
-            Log.Write($"Capture request: class={source.ClassName}, size={source.Width}x{source.Height}, vr={enableVr}, border={settings.EffectiveBorder}, compat={settings.EffectiveCompatibilityMode}.");
-            NativeBridge.SetCompatibility(bridge, settings.EffectiveCompatibilityMode ? 1u : 0);
+            Log.Write($"Capture request: class={source.ClassName}, size={source.Width}x{source.Height}, vr={enableVr}, border={settings.Border}.");
             await Task.Run(() => NativeBridge.StartCapture(bridge, (nuint)source.Handle, options));
             running = true;
             reconnecting = false;

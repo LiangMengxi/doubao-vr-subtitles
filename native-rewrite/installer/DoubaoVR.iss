@@ -32,7 +32,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0.19041
+MinVersion=10.0.22000
 OutputDir={#ReleaseDir}
 OutputBaseFilename=DoubaoVR-v{#AppVersion}-Setup-x64
 SetupIconFile=..\assets\bridge.ico
@@ -46,7 +46,12 @@ CloseApplicationsFilter=DoubaoVR.exe,DoubaoVR.Desktop.exe
 RestartApplications=no
 ChangesEnvironment=no
 Uninstallable=yes
-VersionInfoVersion={#AppVersion}.0
+#ifndef NumericVersion
+  #define NumericVersion "0.5.1"
+#endif
+VersionInfoVersion={#NumericVersion}.0
+VersionInfoProductVersion={#NumericVersion}.0
+VersionInfoProductTextVersion={#AppVersion}
 VersionInfoDescription=豆包VR字幕安装程序
 
 [Languages]

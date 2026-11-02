@@ -300,10 +300,7 @@ public:
         return S_OK;
     }
     int set_compatibility(uint32_t enabled) noexcept {
-        std::lock_guard control_guard(control);
-        if (disposed) return E_HANDLE;
         if (enabled > 1) return E_INVALIDARG;
-        compatibility_mode.store(enabled != 0);
         return S_OK;
     }
     int set_restarting(uint32_t restarting) noexcept {
@@ -390,13 +387,7 @@ private:
     }
     void capture(HWND window, DWORD process_id, std::wstring_view& stage, const std::optional<BridgeAssistantRequest>& assistant_request) {
         stage = L"检查 Windows 窗口捕获支持";
-        bool supported = true;
-        try {
-            supported = GraphicsCaptureSession::IsSupported();
-        } catch (...) {
-            if (!compatibility_mode.load()) throw;
-        }
-        if (!supported) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
+        if (!GraphicsCaptureSession::IsSupported()) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
         auto current = configuration();
         std::unique_ptr<Graphics> graphics_storage;
         stage = L"连接 SteamVR";
@@ -460,14 +451,12 @@ private:
                 }
             } catch (...) { }
             stage = L"设置窗口捕获边框";
-            if (!compatibility_mode.load()) {
-                try {
-                    if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
-                        L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
-                        lifetime.session.IsBorderRequired(current.border != 0);
-                    }
-                } catch (...) { }
-            }
+            try {
+                if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
+                    L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
+                    lifetime.session.IsBorderRequired(current.border != 0);
+                }
+            } catch (...) { }
             stage = L"启动 Windows 窗口捕获";
             lifetime.session.StartCapture();
         };
@@ -668,7 +657,6 @@ private:
     bool disposed = false;
     std::atomic<bool> stopping{false};
     std::atomic<bool> reset_assistant_requested{false};
-    std::atomic<bool> compatibility_mode{false};
     std::atomic<bool> is_restarting{false};
     std::atomic<uintptr_t> pending_rebind_window{0};
     BridgeOptions options{};

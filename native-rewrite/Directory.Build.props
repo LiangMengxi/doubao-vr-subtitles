@@ -3,9 +3,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <Deterministic>true</Deterministic>
-    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim())</Version>
-    <FileVersion>$(Version).0</FileVersion>
-    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <RawVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim())</RawVersion>
+    <NumericVersion>$([System.Text.RegularExpressions.Regex]::Match('$(RawVersion)', '^\d+\.\d+\.\d+').Value)</NumericVersion>
+    <Version>$(RawVersion)</Version>
+    <FileVersion>$(NumericVersion).0</FileVersion>
+    <AssemblyVersion>$(NumericVersion).0</AssemblyVersion>
+    <InformationalVersion>$(RawVersion)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>豆包VR字幕</Product>
     <Description>豆包VR字幕主程序</Description>

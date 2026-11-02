@@ -20,7 +20,7 @@ BEGIN
             VALUE "InternalName", "DoubaoVR.Core"
             VALUE "OriginalFilename", "DoubaoVR.Core.dll"
             VALUE "ProductName", "豆包VR字幕"
-            VALUE "ProductVersion", "@PROJECT_VERSION@"
+            VALUE "ProductVersion", "@PROJECT_PRODUCT_VERSION@"
         END
     END
     BLOCK "VarFileInfo"

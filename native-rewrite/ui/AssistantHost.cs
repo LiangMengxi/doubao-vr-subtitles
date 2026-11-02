@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace DoubaoVR.Desktop;
 
 internal sealed record AssistantHostRequest(string Action, ulong Window = 0, uint ProcessId = 0, ulong ProcessStarted = 0,
-    bool Vr = false, bool Activate = false, bool Preview = false, ulong AfterPreview = 0, ulong AfterImage = 0, bool Border = false, float Width = .7f, bool ResetOnDashboard = false, bool Compatibility = false);
+    bool Vr = false, bool Activate = false, bool Preview = false, ulong AfterPreview = 0, ulong AfterImage = 0, bool Border = false, float Width = .7f, bool ResetOnDashboard = false);
 
 internal sealed record AssistantHostReply(uint CaptureState = 0, uint InteractionState = 0, string Message = "", string Error = "",
     ulong PreviewSequence = 0, uint PreviewWidth = 0, uint PreviewHeight = 0, int PreviewLength = 0,
@@ -30,7 +30,7 @@ internal sealed class AssistantHost
         errors = DrainAsync(process.StandardError.BaseStream);
     }
 
-    public static async Task<AssistantHost> StartAsync(AssistantTarget target, bool vr, bool activate, CancellationToken cancellation, Action<string>? progress = null, bool border = false, float width = .7f, bool resetOnDashboard = false, bool compatibility = false)
+    public static async Task<AssistantHost> StartAsync(AssistantTarget target, bool vr, bool activate, CancellationToken cancellation, Action<string>? progress = null, bool border = false, float width = .7f, bool resetOnDashboard = false)
     {
         cancellation.ThrowIfCancellationRequested();
         if (vr) SteamVrAccess.EnsureCompatible();
@@ -53,7 +53,7 @@ internal sealed class AssistantHost
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             deadline.CancelAfter(TimeSpan.FromSeconds(10));
-            await host.CallAsync(new("start", target.Window, target.ProcessId, target.ProcessStarted, vr, activate, Border: border, Width: width, ResetOnDashboard: resetOnDashboard, Compatibility: compatibility), deadline.Token);
+            await host.CallAsync(new("start", target.Window, target.ProcessId, target.ProcessStarted, vr, activate, Border: border, Width: width, ResetOnDashboard: resetOnDashboard), deadline.Token);
             string lastStage = "正在启动助手";
             try
             {
@@ -200,9 +200,7 @@ internal sealed class AssistantHost
                     int identified = NativeBridge.AssistantTarget(ref target, ref error);
                     if (identified < 0 || target.ProcessStarted != original.ProcessStarted) throw new InvalidOperationException(error.Text.Length == 0 ? "豆包窗口已变化。" : error.Text);
                     vr = request.Vr;
-                    bool compat = request.Compatibility || Settings.IsBelowFullSupport;
-                    bool effectiveBorder = compat || request.Border;
-                    NativeBridge.SetCompatibility(bridge, compat ? 1u : 0);
+                    bool effectiveBorder = request.Border;
                     float initialWidth = float.IsFinite(request.Width) ? Math.Clamp(request.Width, .3f, 1.5f) : .7f;
                     uint initialReset = request.ResetOnDashboard ? 1u : 0;
                     currentOptions = new BridgeOptions

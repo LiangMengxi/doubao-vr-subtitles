@@ -24,7 +24,6 @@ internal sealed partial class MainWindow
     private readonly Button assistantAttach = new() { Content = "添加截图", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
     private readonly Button assistantResetPosition = new() { Content = "重置浮窗位置到视野右侧", MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
     private readonly ToggleSwitch assistantBorder = new() { Header = "显示捕获黄框" };
-    private readonly TextBlock assistantCompatibilityNotice = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75, Visibility = Visibility.Collapsed };
     private readonly Image assistantPreview = new() { Stretch = Stretch.Uniform, MaxHeight = 260 };
     private readonly SemaphoreSlim assistantOperations = new(1, 1);
     private DispatcherQueueTimer? assistantTimer;
@@ -75,10 +74,9 @@ internal sealed partial class MainWindow
         var autoAttach = new ToggleSwitch { Header = "截图后添加到豆包", IsOn = settings.AssistantAutoAttach };
         autoAttach.Toggled += (_, _) => { settings.AssistantAutoAttach = autoAttach.IsOn; ApplyConfiguration(); };
         options.Children.Add(autoAttach);
-        assistantBorder.IsOn = !settings.EffectiveCompatibilityMode && settings.Border;
+        assistantBorder.IsOn = settings.Border;
         assistantBorder.Toggled += async (_, _) => await UpdateCaptureBorderAsync(assistantBorder.IsOn);
         options.Children.Add(assistantBorder);
-        options.Children.Add(assistantCompatibilityNotice);
         page.Children.Add(new SettingsExpander { Style = (Style)Application.Current.Resources["SettingsExpanderStyle"], Header = "窗口与截图", Content = options, IsExpanded = false });
         return page;
     }
@@ -152,7 +150,7 @@ internal sealed partial class MainWindow
             if (previous != null) await previous.StopAsync();
             assistantStatus.Text = enableVr ? "正在连接 SteamVR…" : "正在连接浮窗…";
             assistantHost = await AssistantHost.StartAsync(target, enableVr, settings.AssistantActivateOnClick, lifetime.Token,
-                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.EffectiveBorder, settings.AssistantWidth, settings.AssistantResetOnDashboard, settings.EffectiveCompatibilityMode);
+                message => { if (!shuttingDown) assistantStatus.Text = message; }, settings.Border, settings.AssistantWidth, settings.AssistantResetOnDashboard);
             assistantTarget = target; assistantRunning = true; assistantVrEnabled = enableVr;
             assistantPreviewSequence = 0;
             assistantImageSequence = 0;
@@ -176,11 +174,6 @@ internal sealed partial class MainWindow
     private async Task UpdateCaptureBorderAsync(bool enabled)
     {
         if (syncingBorder || shuttingDown) return;
-        if (settings.EffectiveCompatibilityMode)
-        {
-            UpdateCompatibilityUi();
-            return;
-        }
         syncingBorder = true;
         try
         {
