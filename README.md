@@ -1,20 +1,20 @@
 # 豆包VR字幕
 
-**创作者：凉梦曦** · **v0.5.0** · Windows 10 2004 / Windows 11 x64 · SteamVR
+**创作者：凉梦曦** · **v0.5.2** · Windows 11 x64 · SteamVR
 
-**v0.5.0** 新增麦克风语音实时转录翻译并通过 OSC 推送至 VRChat 聊天框功能（搭载 SenseVoice 离线高精度语音模型），并包含字幕窗口重启定格、截图粘贴确认等体验优化。
+**v0.5.2** 原生面向 Windows 11 构建：彻底移除旧版兼容模式残留，优化 WGC 捕获帧率节流与静态窗口首帧唤醒，修复 SteamVR 待机休眠唤醒恢复、音频设置跳转及 OSC 麦克风选用，并支持运行中实时切换捕获黄框。
 
 “助手”页支持一键开启豆包对话浮窗 VR 显示、手柄射线点击与滚动、握把拖拽、浮窗大小调节与位置一键重置，以及左摇杆进入／退出空间截图模式、双手扳机细淡粉色框选并自动将截图放入豆包发送框。操作见 [使用说明](docs/USAGE.md)。
 
-将豆包桌面版的实时字幕窗口与对话浮窗捕获到 SteamVR 悬浮层。豆包负责识别、对话和翻译，本程序转发画面与空间截图附件，不上传字幕、不修改豆包或游戏。默认不读取麦克风；明确开启可选的 PICO 延迟改善后，仅消费并丢弃匹配设备的音频包，不保存、不上传。独立的非官方项目。
+将豆包桌面版的实时字幕窗口与对话浮窗捕获到 SteamVR 悬浮层。豆包负责识别、对话和翻译，本程序转发画面与空间截图附件，不上传字幕、不修改豆包或游戏。默认不读取麦克风；明确开启可选的 PICO 延迟改善或 VRChat 聊天框同传后，按对应开关处理麦克风音频。独立的非官方项目。
 
 ## 下载与安装
 
-在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.5.0) 下载：
+在 [Releases](https://github.com/LiangMengxi/doubao-vr-subtitles/releases/tag/v0.5.2) 下载：
 
-- `DoubaoVR-v0.5.0-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
-- `DoubaoVR-v0.5.0-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
-- `DoubaoVR-v0.5.0-source.zip`：对应版本的完整公开源码及构建资料。
+- `DoubaoVR-v0.5.2-Setup-x64.exe`：一键安装版。安装和升级均显示目录，默认沿用上次安装路径。
+- `DoubaoVR-v0.5.2-windows-x64.zip`：免安装版，完整解压后运行 `DoubaoVR.exe`，不要只复制 EXE。
+- `DoubaoVR-v0.5.2-source.zip`：对应版本的完整公开源码及构建资料。
 - 三个包均提供 `.sha256` 校验文件。
 
 下载版已包含 .NET 与 WinUI 运行文件，不需要安装 Python、.NET SDK 或额外依赖管理器。需要另外安装并登录豆包桌面版；VR 显示需要 SteamVR 和头显，VRChat 不是必需依赖。

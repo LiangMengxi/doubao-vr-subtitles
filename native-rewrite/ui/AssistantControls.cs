@@ -171,9 +171,9 @@ internal sealed partial class MainWindow
         await ChangeAssistantAsync(resumeVr);
     }
 
-    private async Task UpdateCaptureBorderAsync(bool enabled)
+    private Task UpdateCaptureBorderAsync(bool enabled)
     {
-        if (syncingBorder || shuttingDown) return;
+        if (syncingBorder || shuttingDown) return Task.CompletedTask;
         syncingBorder = true;
         try
         {
@@ -181,12 +181,10 @@ internal sealed partial class MainWindow
             if (assistantBorder.IsOn != enabled) assistantBorder.IsOn = enabled;
         }
         finally { syncingBorder = false; }
-        if (settings.Border == enabled) return;
+        if (settings.Border == enabled) return Task.CompletedTask;
         settings.Border = enabled;
         ApplyConfiguration();
-        try { if (running) await StartAsync(vrEnabled); }
-        catch (Exception exception) { Report(exception); }
-        await ReconnectAssistantAsync();
+        return Task.CompletedTask;
     }
 
     private async Task StopAssistantCoreAsync(bool dispose)
@@ -218,7 +216,7 @@ internal sealed partial class MainWindow
         long epoch = assistantEpoch;
         try
         {
-            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard);
+            var snapshot = await host.PollAsync(selectedPage == 2, assistantPreviewSequence, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard, settings.Border);
             if (shuttingDown || epoch != assistantEpoch || !ReferenceEquals(host, assistantHost)) return;
             var state = snapshot.Reply;
             if (state.InteractionState != lastAssistantState || state.Message != lastAssistantMessage)
@@ -297,7 +295,7 @@ internal sealed partial class MainWindow
             AssistantHostSnapshot? beforeSnapshot = null;
             if (host != null && assistantRunning)
             {
-                try { beforeSnapshot = await host.PollAsync(true, 0, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard); }
+                try { beforeSnapshot = await host.PollAsync(true, 0, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard, settings.Border); }
                 catch { }
             }
             if (shuttingDown || epoch != assistantEpoch) return;
@@ -314,7 +312,7 @@ internal sealed partial class MainWindow
                     await Task.Delay(90, lifetime.Token);
                     try
                     {
-                        var after = await host.PollAsync(true, afterSeq, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard);
+                        var after = await host.PollAsync(true, afterSeq, assistantImageSequence, lifetime.Token, settings.AssistantWidth, settings.AssistantResetOnDashboard, settings.Border);
                         if (after.Preview.Length > 0)
                         {
                             afterSeq = after.Reply.PreviewSequence;

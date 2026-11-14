@@ -54,6 +54,7 @@ internal sealed partial class MainWindow
             if (refreshingAudio || shuttingDown || microphoneTargets.SelectedItem is not AudioDevice device) return;
             settings.MicrophoneTargetId = device.Id;
             settings.MicrophoneTargetName = device.Name;
+            speechTranslator.SetPreferredMicrophone(device.Id, device.Name);
             ApplyConfiguration();
         };
         refreshAudio.Click += async (_, _) => await RefreshAudioAsync(true);
@@ -101,7 +102,7 @@ internal sealed partial class MainWindow
         if (restoringAudio || shuttingDown) return;
         if (string.IsNullOrEmpty(settings.AudioTargetId) && string.IsNullOrEmpty(settings.MicrophoneTargetId))
         {
-            showPage?.Invoke(2);
+            showPage?.Invoke(3);
             if (audioSection != null) audioSection.IsExpanded = true;
             DispatcherQueue.TryEnqueue(() => { audioTargets.StartBringIntoView(); audioTargets.Focus(FocusState.Programmatic); });
             return;

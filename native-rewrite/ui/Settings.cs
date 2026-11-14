@@ -8,10 +8,7 @@ internal sealed record SettingsSnapshot(string Json, string BackgroundImage);
 
 internal sealed class Settings
 {
-    public const int FullSupportBuild = 22000;
-    public static int OsBuild => Environment.OSVersion.Version.Build;
-    public static bool IsBelowFullSupport => false;
-    public static string CurrentAppVersion => "0.5.1-w11";
+    public static string CurrentAppVersion => "0.5.2";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DoubaoVR.Native");
     private static string FilePath => Path.Combine(DataDirectory, "settings.json");
     public static string? LoadWarning { get; private set; }
@@ -26,7 +23,6 @@ internal sealed class Settings
     [JsonPropertyName("crop_top")] public float CropTop { get; set; }
     [JsonPropertyName("appearance")] public string Appearance { get; set; } = "system";
     [JsonPropertyName("show_capture_border")] public bool Border { get; set; }
-    [JsonPropertyName("checked_app_version"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public string CheckedAppVersion { get; set; } = "";
     [JsonPropertyName("auto_restart_captions")] public bool AutoRestartCaptions { get; set; } = true;
     [JsonPropertyName("auto_restart_interval_minutes")] public float AutoRestartIntervalMinutes { get; set; } = 30;
     [JsonPropertyName("trim")] public bool Trim { get; set; } = true;
@@ -49,8 +45,6 @@ internal sealed class Settings
     [JsonPropertyName("vrchat_osc_language")] public string VrchatOscLanguage { get; set; } = "en";
     [JsonPropertyName("vrchat_osc_bilingual")] public bool VrchatOscBilingual { get; set; } = true;
     [JsonPropertyName("vrchat_osc_sound")] public bool VrchatOscSound { get; set; } = true;
-    [JsonIgnore] public bool EffectiveCompatibilityMode => false;
-    [JsonIgnore] public bool EffectiveBorder => Border;
 
     public static Settings Load()
     {
@@ -88,7 +82,6 @@ internal sealed class Settings
         CropTop = Limit(CropTop, 0, 120, 0);
         AssistantWidth = Limit(AssistantWidth, .3f, 1.5f, .7f);
         AutoRestartIntervalMinutes = (float)Math.Round(Limit(AutoRestartIntervalMinutes, 0, 120, 30));
-        if (CheckedAppVersion is null || CheckedAppVersion.Length > 64 || CheckedAppVersion.Contains('\0')) CheckedAppVersion = "";
         if (Appearance is not ("light" or "dark" or "system")) Appearance = "system";
         AccentColor = Rgb.TryParse(AccentColor, out var color) ? color.Hex : "";
         if (!BackgroundFiles.IsOwnedName(BackgroundImage)) BackgroundImage = "";
@@ -114,7 +107,7 @@ internal sealed class Settings
     {
         Size = (uint)Marshal.SizeOf<BridgeOptions>(), Width = Width, Distance = Distance,
         Horizontal = Horizontal, Vertical = Vertical, Opacity = Opacity, Pitch = Pitch, Yaw = Yaw,
-        CropTop = (uint)CropTop, Trim = Trim ? 1u : 0, Border = EffectiveBorder ? 1u : 0,
+        CropTop = (uint)CropTop, Trim = Trim ? 1u : 0, Border = Border ? 1u : 0,
         Vr = vr ? 1u : 0, Preview = preview ? 1u : 0, CurvatureDegrees = CurvatureDegrees
     };
 }

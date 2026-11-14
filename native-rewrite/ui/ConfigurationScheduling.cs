@@ -4,7 +4,6 @@ internal sealed partial class MainWindow
 {
     private readonly SettingsStore settingsStore = new(Settings.DataDirectory);
     private readonly PreferenceScheduler preferences;
-    private bool captureBorder;
 
     private void RequestLiveConfiguration()
     {

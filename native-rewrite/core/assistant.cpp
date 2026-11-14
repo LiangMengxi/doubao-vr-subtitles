@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "spatial_image.h"
 #include "assistant_pose.h"
+#include <windows.h>
 #include <openvr.h>
 #include <filesystem>
 #include <functional>
@@ -14,6 +15,16 @@ namespace {
 void check_overlay(vr::EVROverlayError result) {
     if (result != vr::VROverlayError_None) throw winrt::hresult_error(E_FAIL,
         winrt::to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(result)));
+}
+bool is_standby() noexcept {
+    if (!vr::VRSystem()) return false;
+    const auto level = vr::VRSystem()->GetTrackedDeviceActivityLevel(vr::k_unTrackedDeviceIndex_Hmd);
+    return level == vr::k_EDeviceActivityLevel_Standby || level == vr::k_EDeviceActivityLevel_UserInteraction_Timeout;
+}
+bool check_overlay_runtime(vr::EVROverlayError result) {
+    if (result == vr::VROverlayError_None) return true;
+    if (is_standby()) return false;
+    throw winrt::hresult_error(E_FAIL, winrt::to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(result)));
 }
 spatial::Vector column(const vr::HmdMatrix34_t& matrix, size_t index) {
     return {matrix.m[0][index], matrix.m[1][index], matrix.m[2][index]};
@@ -224,13 +235,42 @@ int32_t __cdecl bridge_assistant_paste(const BridgeAssistantTarget& target, Brid
     return target_call(error, [&] { platform::assistant_paste(target); });
 }
 
-AssistantInteraction::AssistantInteraction(uint64_t overlay_value, BridgeAssistantRequest requested, std::shared_ptr<AssistantMailbox> messages)
-    : overlay(overlay_value), request(std::move(requested)), mailbox(std::move(messages)), panel_width(request.width) {
-    worker = std::jthread([this](std::stop_token stop) { run(stop); });
+AssistantInteraction::AssistantInteraction(uint64_t overlay_value, BridgeAssistantRequest requested, std::shared_ptr<AssistantMailbox> messages) {
+    state = std::make_shared<AssistantState>();
+    state->overlay = overlay_value;
+    state->request = std::move(requested);
+    state->mailbox = std::move(messages);
+    state->panel_width = state->request.width;
+    worker = std::jthread([shared = state](std::stop_token stop) { run(stop, shared); });
 }
-AssistantInteraction::~AssistantInteraction() { worker.request_stop(); if (worker.joinable()) worker.join(); }
+AssistantInteraction::~AssistantInteraction() {
+    worker.request_stop();
+    if (worker.joinable()) {
+        HANDLE thread_handle = reinterpret_cast<HANDLE>(worker.native_handle());
+        if (thread_handle) {
+            DWORD wait_result = WaitForSingleObject(thread_handle, 2000);
+            if (wait_result == WAIT_OBJECT_0) {
+                worker.join();
+            } else {
+                worker.detach();
+            }
+        } else {
+            worker.join();
+        }
+    }
+}
 
-void AssistantInteraction::run(std::stop_token stop) noexcept {
+void AssistantInteraction::run(std::stop_token stop, std::shared_ptr<AssistantState> state) noexcept {
+    const auto& overlay = state->overlay;
+    const auto& request = state->request;
+    const auto& mailbox = state->mailbox;
+    auto& visibility = state->visibility;
+    auto& suppress = state->suppress;
+    auto& image_width = state->image_width;
+    auto& image_height = state->image_height;
+    auto& panel_width = state->panel_width;
+    auto& reset_on_dashboard = state->reset_on_dashboard;
+    auto& reset_requested = state->reset_requested;
     try {
         platform::ApartmentScope apartment;
         mailbox->update(1, L"正在加载手柄映射…");
@@ -293,7 +333,7 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                 std::lock_guard lock(visibility);
                 suppress = false;
                 selection.reset();
-                if (image_width > 0) check_overlay(vr::VROverlay()->ShowOverlay(overlay));
+                if (image_width > 0) check_overlay_runtime(vr::VROverlay()->ShowOverlay(overlay));
             }
             actions.update();
             const bool toggle = actions.pressed(0);
@@ -330,16 +370,18 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                 auto initial = panel(head.mDeviceToAbsoluteTracking, initial_width, initial_width);
                 initial.center = initial.center - initial.back * request.distance;
                 placement = transform(initial);
-                check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
-                positioned = true;
+                if (check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement))) {
+                    positioned = true;
+                }
             }
             const bool auto_reset = reset_on_dashboard.load() && (dashboard && !previous_dashboard);
             if (reset_requested.exchange(false) || auto_reset) {
                 const float current_width = panel_width.load();
                 const auto standard = standard_placement(head.mDeviceToAbsoluteTracking, current_width, request.distance, true);
                 placement = transform(standard);
-                check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
-                positioned = true;
+                if (check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement))) {
+                    positioned = true;
+                }
                 grabbed = -1;
             }
             previous_dashboard = dashboard;
@@ -381,26 +423,28 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                     auto prompt_plane = panel(head.mDeviceToAbsoluteTracking, .42f, .42f * 96.f / 512.f);
                     prompt_plane.center = prompt_plane.center - prompt_plane.back * .85f;
                     const auto matrix = transform(prompt_plane);
-                    check_overlay(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, prompt_plane.width));
-                    check_overlay(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, 1.f));
-                    check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix));
-                    check_overlay(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, enter_prompt_texture, graphics.context)));
-                    check_overlay(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    if (check_overlay_runtime(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, prompt_plane.width))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, 1.f))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix))
+                        && check_overlay_runtime(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, enter_prompt_texture, graphics.context)))) {
+                        check_overlay_runtime(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    }
                 } else if (visible_region && !captured) {
                     const auto& region = *visible_region;
                     const auto matrix = transform(region);
-                    check_overlay(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, region.width));
-                    check_overlay(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, region.width / region.height));
-                    check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix));
-                    check_overlay(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, outline_texture, graphics.context)));
-                    check_overlay(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    if (check_overlay_runtime(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, region.width))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, region.width / region.height))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix))
+                        && check_overlay_runtime(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, outline_texture, graphics.context)))) {
+                        check_overlay_runtime(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    }
                 } else vr::VROverlay()->HideOverlay(selection_overlay.handle);
                 if (captured) {
                     vr::VROverlay()->HideOverlay(selection_overlay.handle);
                     {
                         std::lock_guard lock(visibility);
                         suppress = true;
-                        check_overlay(vr::VROverlay()->HideOverlay(overlay));
+                        check_overlay_runtime(vr::VROverlay()->HideOverlay(overlay));
                     }
                     const auto captured_head = head.mDeviceToAbsoluteTracking;
                     mailbox->update(3, L"正在截图…");
@@ -434,11 +478,12 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                     auto prompt_plane = panel(head.mDeviceToAbsoluteTracking, .38f, .38f * 96.f / 512.f);
                     prompt_plane.center = prompt_plane.center - prompt_plane.back * .85f;
                     const auto matrix = transform(prompt_plane);
-                    check_overlay(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, prompt_plane.width));
-                    check_overlay(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, 1.f));
-                    check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix));
-                    check_overlay(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, exit_prompt_texture, graphics.context)));
-                    check_overlay(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    if (check_overlay_runtime(vr::VROverlay()->SetOverlayWidthInMeters(selection_overlay.handle, prompt_plane.width))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTexelAspect(selection_overlay.handle, 1.f))
+                        && check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(selection_overlay.handle, origin, &matrix))
+                        && check_overlay_runtime(static_cast<vr::EVROverlayError>(platform::submit_overlay(selection_overlay.handle, exit_prompt_texture, graphics.context)))) {
+                        check_overlay_runtime(vr::VROverlay()->ShowOverlay(selection_overlay.handle));
+                    }
                 } else {
                     vr::VROverlay()->HideOverlay(selection_overlay.handle);
                 }
@@ -465,7 +510,7 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                     if (!hands[grabbed] || !grips[grabbed]) grabbed = -1;
                     else {
                         placement = multiply(*hands[grabbed], grab_offset);
-                        check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
+                        check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(overlay, origin, &placement));
                     }
                 } else {
                     const auto primary = hits[1] ? 1u : 0u;
@@ -473,8 +518,9 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
                         auto cursor = surface;
                         cursor.center = surface.point((*hits[primary])[0], (*hits[primary])[1]) + surface.back * .004f;
                         const auto matrix = transform(cursor);
-                        check_overlay(vr::VROverlay()->SetOverlayTransformAbsolute(pointer_overlay.handle, origin, &matrix));
-                        check_overlay(vr::VROverlay()->ShowOverlay(pointer_overlay.handle));
+                        if (check_overlay_runtime(vr::VROverlay()->SetOverlayTransformAbsolute(pointer_overlay.handle, origin, &matrix))) {
+                            check_overlay_runtime(vr::VROverlay()->ShowOverlay(pointer_overlay.handle));
+                        }
                     } else vr::VROverlay()->HideOverlay(pointer_overlay.handle);
                     int wheel = 0;
                     const auto scroll = actions.scroll();
@@ -492,6 +538,6 @@ void AssistantInteraction::run(std::stop_token stop) noexcept {
             std::this_thread::sleep_until(frame_start + 11ms);
         }
     } catch (...) {
-        mailbox->update(6, std::wstring(winrt::to_message()));
+        if (!stop.stop_requested()) mailbox->update(6, std::wstring(winrt::to_message()));
     }
 }

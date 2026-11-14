@@ -21,27 +21,32 @@ struct AssistantMailbox {
     }
 };
 
+struct AssistantState {
+    uint64_t overlay = 0;
+    BridgeAssistantRequest request{};
+    std::shared_ptr<AssistantMailbox> mailbox;
+    std::mutex visibility;
+    std::atomic<bool> suppress{false};
+    std::atomic<uint32_t> image_width{0}, image_height{0};
+    std::atomic<float> panel_width{.7f};
+    std::atomic<bool> reset_on_dashboard{false};
+    std::atomic<bool> reset_requested{false};
+};
+
 class AssistantInteraction {
 public:
     AssistantInteraction(uint64_t overlay, BridgeAssistantRequest request, std::shared_ptr<AssistantMailbox> mailbox);
     ~AssistantInteraction();
     AssistantInteraction(const AssistantInteraction&) = delete;
     AssistantInteraction& operator=(const AssistantInteraction&) = delete;
-    bool suppressed() const { return suppress.load(); }
-    void dimensions(uint32_t width, uint32_t height) { image_width = width; image_height = height; }
-    void set_width(float width) noexcept { panel_width = width; }
-    void set_reset_on_dashboard(bool enabled) noexcept { reset_on_dashboard.store(enabled); }
-    void reset_position() noexcept { reset_requested.store(true); }
-    std::mutex visibility;
+    bool suppressed() const { return state->suppress.load(); }
+    void dimensions(uint32_t width, uint32_t height) { state->image_width = width; state->image_height = height; }
+    void set_width(float width) noexcept { state->panel_width = width; }
+    void set_reset_on_dashboard(bool enabled) noexcept { state->reset_on_dashboard.store(enabled); }
+    void reset_position() noexcept { state->reset_requested.store(true); }
+    std::mutex& visibility_mutex() noexcept { return state->visibility; }
 private:
-    void run(std::stop_token stop) noexcept;
-    uint64_t overlay;
-    BridgeAssistantRequest request;
-    std::shared_ptr<AssistantMailbox> mailbox;
-    std::atomic<bool> suppress{false};
-    std::atomic<uint32_t> image_width{0}, image_height{0};
-    std::atomic<float> panel_width{.7f};
-    std::atomic<bool> reset_on_dashboard{false};
-    std::atomic<bool> reset_requested{false};
+    static void run(std::stop_token stop, std::shared_ptr<AssistantState> state) noexcept;
+    std::shared_ptr<AssistantState> state;
     std::jthread worker;
 };

@@ -51,11 +51,6 @@ internal sealed partial class MainWindow : Window
     public MainWindow(bool smokeTest)
     {
         this.smokeTest = smokeTest;
-        bool versionChanged = !string.Equals(settings.CheckedAppVersion, Settings.CurrentAppVersion, StringComparison.Ordinal);
-        if (versionChanged)
-        {
-            settings.CheckedAppVersion = Settings.CurrentAppVersion;
-        }
         preferences = new(DispatcherQueue, ConfigureAsync, PersistSettingsAsync, PreferenceFailure);
         Title = "豆包VR字幕";
         AppWindow.Resize(new SizeInt32(590, 740));
@@ -94,7 +89,6 @@ internal sealed partial class MainWindow : Window
             if (bridge.IsInvalid) throw new InvalidOperationException("无法创建原生核心。");
         }
         catch (Exception exception) { Report(new InvalidOperationException("原生核心尚未就绪，请运行 build.ps1 完成构建。" + exception.Message)); }
-        if (versionChanged) ApplyConfiguration();
         if (Settings.LoadWarning != null) status.Text = Settings.LoadWarning;
         RefreshSources();
         ApplyBackground();
@@ -242,7 +236,8 @@ internal sealed partial class MainWindow : Window
             settings.VrchatOscSound = vrchatOscSoundToggle.IsOn;
             speechTranslator.Configure(targetLang, settings.VrchatOscBilingual, settings.VrchatOscSound,
                 (spoken, trans) => DispatcherQueue.TryEnqueue(() => vrchatOscStatus.Text = $"已发送: {trans} ({spoken})"),
-                msg => DispatcherQueue.TryEnqueue(() => vrchatOscStatus.Text = msg));
+                msg => DispatcherQueue.TryEnqueue(() => vrchatOscStatus.Text = msg),
+                settings.MicrophoneTargetId, settings.MicrophoneTargetName);
             ApplyConfiguration();
         };
 
@@ -418,7 +413,6 @@ internal sealed partial class MainWindow : Window
         {
             if (shuttingDown || !running) return;
             var options = settings.Options(vrEnabled, previewVisible);
-            options.Border = captureBorder ? 1u : 0;
             await Task.Run(() => Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, options)));
         }
         finally { operations.Release(); }
@@ -463,7 +457,6 @@ internal sealed partial class MainWindow : Window
             running = true;
             reconnecting = false;
             vrEnabled = enableVr;
-            captureBorder = options.Border != 0;
             connected = source;
             previewSequence = 0;
             ResetAutoRestartSchedule();

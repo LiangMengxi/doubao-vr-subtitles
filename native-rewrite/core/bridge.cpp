@@ -9,7 +9,6 @@
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
@@ -46,6 +45,7 @@ struct CaptureLifetime {
     Direct3D11CaptureFramePool::FrameArrived_revoker frame_event;
     GraphicsCaptureItem::Closed_revoker close_event;
     std::shared_ptr<std::atomic<bool>> closed = std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<std::atomic<bool>> frame_arrived = std::make_shared<std::atomic<bool>>(false);
     void reset() noexcept {
         frame_event.revoke();
         close_event.revoke();
@@ -53,6 +53,7 @@ struct CaptureLifetime {
         if (pool) { try { pool.Close(); } catch (...) { } pool = nullptr; }
         item = nullptr;
         closed = std::make_shared<std::atomic<bool>>(false);
+        frame_arrived = std::make_shared<std::atomic<bool>>(false);
     }
     ~CaptureLifetime() noexcept { reset(); }
 };
@@ -161,7 +162,7 @@ public:
     void submit(const com_ptr<ID3D11Texture2D>& texture, const com_ptr<ID3D11DeviceContext>& context) {
         std::unique_lock visibility_lock(visibility, std::defer_lock);
         if (assistant) {
-            visibility_lock = std::unique_lock(assistant->visibility);
+            visibility_lock = std::unique_lock(assistant->visibility_mutex());
             D3D11_TEXTURE2D_DESC description{};
             texture->GetDesc(&description);
             assistant->dimensions(description.Width, description.Height);
@@ -260,7 +261,9 @@ public:
             assistant_mailbox->message.clear();
             assistant_mailbox->pixels.clear();
         }
-        worker = std::jthread([self = shared_from_this(), window, process_id, assistant_request] { self->run(window, process_id, assistant_request); });
+        worker = std::jthread([self = shared_from_this(), window, process_id, assistant_request](std::stop_token stop_token) {
+            self->run(stop_token, window, process_id, assistant_request);
+        });
         return S_OK;
     }
     void stop() {
@@ -291,16 +294,12 @@ public:
         if (disposed) return E_HANDLE;
         if (!valid(requested)) return E_INVALIDARG;
         std::lock_guard lock(mutex);
-        if (stats.state != 0 && (requested.vr != options.vr || requested.border != options.border)) {
-            error = L"切换 VR 或捕获边框需要重新连接捕获。";
+        if (stats.state != 0 && requested.vr != options.vr) {
+            error = L"切换 VR 需要重新连接捕获。";
             return E_INVALIDARG;
         }
         options = requested;
         signal->wake();
-        return S_OK;
-    }
-    int set_compatibility(uint32_t enabled) noexcept {
-        if (enabled > 1) return E_INVALIDARG;
         return S_OK;
     }
     int set_restarting(uint32_t restarting) noexcept {
@@ -348,6 +347,7 @@ private:
         stopping = true;
         is_restarting.store(false);
         pending_rebind_window.store(0);
+        if (worker.joinable()) worker.request_stop();
         signal->wake();
         if (worker.joinable()) {
             HANDLE thread_handle = reinterpret_cast<HANDLE>(worker.native_handle());
@@ -372,20 +372,21 @@ private:
         assistant_mailbox->message.clear();
         std::vector<uint8_t>().swap(assistant_mailbox->pixels);
     }
-    void run(HWND window, DWORD process_id, const std::optional<BridgeAssistantRequest>& assistant_request) noexcept {
+    void run(std::stop_token stop_token, HWND window, DWORD process_id, const std::optional<BridgeAssistantRequest>& assistant_request) noexcept {
         std::wstring_view stage = L"初始化捕获线程";
         try {
             platform::ApartmentScope apartment;
-            capture(window, process_id, stage, assistant_request);
+            capture(stop_token, window, process_id, stage, assistant_request);
         } catch (const hresult_error& exception) {
-            fail(platform::error_text(stage, exception.code(), std::wstring(exception.message())));
+            if (!stop_token.stop_requested()) fail(platform::error_text(stage, exception.code(), std::wstring(exception.message())));
         } catch (const std::exception& exception) {
-            fail(std::wstring(stage) + L"：" + std::wstring(to_hstring(exception.what())));
+            if (!stop_token.stop_requested()) fail(std::wstring(stage) + L"：" + std::wstring(to_hstring(exception.what())));
         } catch (...) {
-            fail(L"原生捕获发生未知错误。");
+            if (!stop_token.stop_requested()) fail(L"原生捕获发生未知错误。");
         }
     }
-    void capture(HWND window, DWORD process_id, std::wstring_view& stage, const std::optional<BridgeAssistantRequest>& assistant_request) {
+    void capture(std::stop_token stop_token, HWND window, DWORD process_id, std::wstring_view& stage, const std::optional<BridgeAssistantRequest>& assistant_request) {
+        if (stop_token.stop_requested()) return;
         stage = L"检查 Windows 窗口捕获支持";
         if (!GraphicsCaptureSession::IsSupported()) throw hresult_error(E_NOTIMPL, L"系统不支持 Windows Graphics Capture。");
         auto current = configuration();
@@ -404,6 +405,9 @@ private:
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         CaptureLifetime lifetime;
         SizeInt32 size{};
+        auto bind_time = Clock::now();
+        bool first_frame_nudged = false;
+        uint32_t applied_border = current.border;
         auto bind_window = [&](HWND target_window, SizeInt32& current_size) {
             lifetime.reset();
             stage = L"创建目标窗口捕获对象（CreateForWindow）";
@@ -413,7 +417,7 @@ private:
                 target_window = root;
             }
             HRESULT hr = E_FAIL;
-            for (int attempt = 0; attempt < 20 && !stopping; ++attempt) {
+            for (int attempt = 0; attempt < 20 && !stop_token.stop_requested(); ++attempt) {
                 if (!IsWindow(target_window)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
@@ -422,13 +426,15 @@ private:
                 if (SUCCEEDED(hr) && lifetime.item) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            if (stop_token.stop_requested()) return;
             check_hresult(hr);
             stage = L"读取目标窗口捕获尺寸";
             current_size = lifetime.item.Size();
-            for (int attempt = 0; attempt < 15 && (current_size.Width <= 0 || current_size.Height <= 0) && !stopping; ++attempt) {
+            for (int attempt = 0; attempt < 15 && (current_size.Width <= 0 || current_size.Height <= 0) && !stop_token.stop_requested(); ++attempt) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 current_size = lifetime.item.Size();
             }
+            if (stop_token.stop_requested()) return;
             if (current_size.Width <= 0 || current_size.Height <= 0 || static_cast<uint64_t>(current_size.Width) * current_size.Height > 16 * 1024 * 1024) {
                 throw hresult_error(E_OUTOFMEMORY, L"捕获窗口尺寸不受支持，请缩小字幕窗口。");
             }
@@ -437,34 +443,33 @@ private:
                 DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, current_size);
             stage = L"创建窗口捕获会话";
             lifetime.session = lifetime.pool.CreateCaptureSession(lifetime.item);
-            lifetime.frame_event = lifetime.pool.FrameArrived(auto_revoke, [wake = signal](auto&&, auto&&) { wake->wake(); });
+            auto arrived_flag = lifetime.frame_arrived;
+            lifetime.frame_event = lifetime.pool.FrameArrived(auto_revoke, [arrived_flag, wake = signal](auto&&, auto&&) {
+                arrived_flag->store(true);
+                wake->wake();
+            });
             auto closed_flag = lifetime.closed;
             lifetime.close_event = lifetime.item.Closed(auto_revoke, [closed_flag, wake = signal](auto&&, auto&&) {
                 closed_flag->store(true);
                 wake->wake();
             });
             stage = L"设置捕获光标";
-            try {
-                if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
-                    L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled")) {
-                    lifetime.session.IsCursorCaptureEnabled(false);
-                }
-            } catch (...) { }
+            lifetime.session.IsCursorCaptureEnabled(false);
             stage = L"设置窗口捕获边框";
-            try {
-                if (winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
-                    L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
-                    lifetime.session.IsBorderRequired(current.border != 0);
-                }
-            } catch (...) { }
+            applied_border = current.border;
+            lifetime.session.IsBorderRequired(applied_border != 0);
             stage = L"启动 Windows 窗口捕获";
             lifetime.session.StartCapture();
+            bind_time = Clock::now();
+            first_frame_nudged = false;
         };
         bind_window(window, size);
+        if (stop_token.stop_requested()) return;
         {
             com_ptr<ID3D11Texture2D> saved;
             BridgeOptions rendered{};
             auto last_frame = Clock::now() - std::chrono::milliseconds(50);
+            auto last_copy = Clock::now() - std::chrono::milliseconds(50);
             auto last_preview = Clock::now() - std::chrono::milliseconds(100);
             uint64_t serial = 0;
             uint64_t preview_serial = 0;
@@ -472,13 +477,25 @@ private:
             uint32_t surface_width = 0;
             uint32_t surface_height = 0;
             bool hidden = false;
+            bool hold_old_frame = false;
             bool awaiting_rebind_frame = false;
             auto rebind_deadline = Clock::now();
             PixelPreview updated;
-            while (!stopping) {
+            while (!stop_token.stop_requested()) {
                 stage = L"检查字幕窗口和 VR 连接状态";
-                WaitForSingleObject(signal->value.get(), 50);
-                if (stopping) break;
+                const bool defer_copy = !hold_old_frame && !hidden && lifetime.pool && lifetime.frame_arrived->load();
+                const bool defer_render = !hidden && (current.vr || current.preview) && saved && pending;
+                DWORD wait_ms = 50;
+                if (defer_copy || defer_render) {
+                    const auto now_wait = Clock::now();
+                    auto earliest = now_wait + std::chrono::milliseconds(50);
+                    if (defer_copy) earliest = std::min(earliest, last_copy + std::chrono::milliseconds(50));
+                    if (defer_render) earliest = std::min(earliest, last_frame + std::chrono::milliseconds(50));
+                    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(earliest - now_wait).count();
+                    wait_ms = remaining <= 0 ? 0 : static_cast<DWORD>(std::clamp<long long>(remaining, 1, 50));
+                }
+                WaitForSingleObject(signal->value.get(), wait_ms);
+                if (stop_token.stop_requested()) break;
                 if (assistant_request) {
                     std::lock_guard lock(assistant_mailbox->mutex);
                     if (assistant_mailbox->state == 6) throw hresult_error(E_FAIL, hstring(assistant_mailbox->message));
@@ -495,6 +512,7 @@ private:
                         try {
                             current = configuration();
                             bind_window(candidate, size);
+                            if (stop_token.stop_requested()) break;
                             window = candidate;
                             process_id = next_owner;
                             awaiting_rebind_frame = true;
@@ -516,7 +534,7 @@ private:
                     awaiting_rebind_frame = false;
                     is_restarting.store(false);
                 }
-                const bool hold_old_frame = restarting_now && !awaiting_rebind_frame;
+                hold_old_frame = restarting_now && !awaiting_rebind_frame;
                 if (!restarting_now && !awaiting_rebind_frame) {
                     DWORD owner = 0;
                     GetWindowThreadProcessId(window, &owner);
@@ -529,7 +547,17 @@ private:
                         continue;
                     }
                 }
+                if (!saved && !first_frame_nudged && !hold_old_frame && IsWindow(window)
+                    && Clock::now() - bind_time >= std::chrono::milliseconds(200)) {
+                    first_frame_nudged = true;
+                    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+                }
                 current = configuration();
+                if (current.border != applied_border && lifetime.session) {
+                    stage = L"更新窗口捕获边框";
+                    applied_border = current.border;
+                    lifetime.session.IsBorderRequired(applied_border != 0);
+                }
                 stage = L"更新 VR 字幕显示参数";
                 if (overlay && overlay->configure(current)) {
                     const auto& curve = overlay->curvature();
@@ -539,9 +567,12 @@ private:
                     error = curve.fallback() ? L"曲面设置未成功，已恢复平面字幕。"
                         + to_hstring(vr::VROverlay()->GetOverlayErrorNameFromEnum(static_cast<vr::EVROverlayError>(curve.error()))) : L"";
                 }
+                auto now = Clock::now();
                 stage = L"读取窗口捕获帧";
                 Direct3D11CaptureFrame frame{nullptr};
-                if (!hold_old_frame && lifetime.pool) {
+                const bool copy_due = !saved || awaiting_rebind_frame || (now - last_copy >= std::chrono::milliseconds(50));
+                if (!hold_old_frame && lifetime.pool && copy_due) {
+                    lifetime.frame_arrived->store(false);
                     frame = lifetime.pool.TryGetNextFrame();
                 }
                 platform::ScopeExit release_frame([&frame] { if (frame) frame.Close(); });
@@ -551,7 +582,6 @@ private:
                         frame = std::move(newer);
                     }
                 }
-                auto now = Clock::now();
                 if (frame) {
                     auto incoming_size = frame.ContentSize();
                     if (incoming_size.Width <= 0 || incoming_size.Height <= 0) {
@@ -587,6 +617,7 @@ private:
                     }
                     stage = L"复制捕获图像";
                     graphics.context->CopyResource(saved.get(), source.get());
+                    last_copy = now;
                     frame.Close();
                     frame = nullptr;
                     if (incoming_size != size) {
@@ -618,7 +649,11 @@ private:
                     render_options.trim = 0;
                 }
                 auto texture = graphics.render(saved, surface_width, surface_height, render_options);
-                if (!texture) continue;
+                if (!texture) {
+                    pending = false;
+                    last_frame = now;
+                    continue;
+                }
                 stage = L"提交 SteamVR 字幕纹理";
                 if (overlay) overlay->submit(texture, graphics.context);
                 bool update_preview = current.preview && (preview_changed || now - last_preview >= std::chrono::milliseconds(100));
@@ -634,6 +669,7 @@ private:
                 hidden = false;
                 D3D11_TEXTURE2D_DESC output_desc{};
                 texture->GetDesc(&output_desc);
+                if (stop_token.stop_requested()) break;
                 {
                     std::lock_guard lock(mutex);
                     stats.state = 2;
@@ -774,12 +810,6 @@ int32_t __cdecl bridge_configure(BridgeId bridge, const BridgeOptions& options) 
     try {
         auto instance = registry().acquire(bridge);
         return instance ? instance->configure(options) : E_HANDLE;
-    } catch (...) { return E_FAIL; }
-}
-int32_t __cdecl bridge_set_compatibility(BridgeId bridge, uint32_t enabled) noexcept {
-    try {
-        auto instance = registry().acquire(bridge);
-        return instance ? instance->set_compatibility(enabled) : E_HANDLE;
     } catch (...) { return E_FAIL; }
 }
 int32_t __cdecl bridge_set_restarting(BridgeId bridge, uint32_t restarting) noexcept {

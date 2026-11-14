@@ -59,7 +59,7 @@ internal sealed class AssistantHost
             {
                 while (true)
                 {
-                    var snapshot = await host.PollAsync(false, 0, 0, deadline.Token, width, resetOnDashboard);
+                    var snapshot = await host.PollAsync(false, 0, 0, deadline.Token, width, resetOnDashboard, border);
                     if (snapshot.Reply.Message != lastStage) { lastStage = snapshot.Reply.Message; progress?.Invoke(lastStage); }
                     if (snapshot.Reply.CaptureState == 2 && (!vr || snapshot.Reply.InteractionState == 0 && lastStage == "助手已连接")) return host;
                     await Task.Delay(100, deadline.Token);
@@ -71,8 +71,8 @@ internal sealed class AssistantHost
         catch { await host.StopAsync(); throw; }
     }
 
-    public Task<AssistantHostSnapshot> PollAsync(bool preview, ulong afterPreview, ulong afterImage, CancellationToken cancellation, float width = .7f, bool resetOnDashboard = false) =>
-        CallAsync(new("poll", Preview: preview, AfterPreview: afterPreview, AfterImage: afterImage, Width: width, ResetOnDashboard: resetOnDashboard), cancellation);
+    public Task<AssistantHostSnapshot> PollAsync(bool preview, ulong afterPreview, ulong afterImage, CancellationToken cancellation, float width = .7f, bool resetOnDashboard = false, bool border = false) =>
+        CallAsync(new("poll", Preview: preview, AfterPreview: afterPreview, AfterImage: afterImage, Border: border, Width: width, ResetOnDashboard: resetOnDashboard), cancellation);
 
     public async Task ResetPositionAsync(CancellationToken cancellation)
     {
@@ -235,10 +235,12 @@ internal sealed class AssistantHost
                 if (request.Action != "poll" || !started) throw new InvalidDataException("助手服务请求无效。");
                 float requestedWidth = float.IsFinite(request.Width) ? Math.Clamp(request.Width, .3f, 1.5f) : currentOptions.Width;
                 uint requestedReset = request.ResetOnDashboard ? 1u : 0;
-                if (Math.Abs(requestedWidth - currentOptions.Width) > 1e-4f || requestedReset != currentOptions.CropTop)
+                uint requestedBorder = request.Border ? 1u : 0;
+                if (Math.Abs(requestedWidth - currentOptions.Width) > 1e-4f || requestedReset != currentOptions.CropTop || requestedBorder != currentOptions.Border)
                 {
                     currentOptions.Width = requestedWidth;
                     currentOptions.CropTop = requestedReset;
+                    currentOptions.Border = requestedBorder;
                     Marshal.ThrowExceptionForHR(NativeBridge.Configure(bridge, currentOptions));
                 }
                 var stats = NativeBridge.Stats(bridge);

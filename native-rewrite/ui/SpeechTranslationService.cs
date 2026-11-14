@@ -22,17 +22,27 @@ internal sealed class SpeechTranslationService : IAsyncDisposable
     private Action<string, string>? onSpeechProcessed;
     private Action<string>? onStatusChanged;
     private string? activeMicName;
+    private string? preferredMicId;
+    private string? preferredMicName;
     private bool speechActiveInCurrentUtterance;
 
     public bool IsListening => isListening;
 
-    public void Configure(string language, bool bilingual, bool sound, Action<string, string>? onProcessed = null, Action<string>? onStatus = null)
+    public void SetPreferredMicrophone(string? micId, string? micName)
+    {
+        preferredMicId = micId;
+        preferredMicName = micName;
+    }
+
+    public void Configure(string language, bool bilingual, bool sound, Action<string, string>? onProcessed = null, Action<string>? onStatus = null, string? micId = null, string? micName = null)
     {
         targetLanguage = language;
         sendBilingual = bilingual;
         sendSound = sound;
         if (onProcessed != null) onSpeechProcessed = onProcessed;
         if (onStatus != null) onStatusChanged = onStatus;
+        if (micId != null) preferredMicId = micId;
+        if (micName != null) preferredMicName = micName;
     }
 
     public async Task<bool> StartAsync()
@@ -65,7 +75,14 @@ internal sealed class SpeechTranslationService : IAsyncDisposable
                     catch { return new List<AudioDevice>(); }
                 });
 
-                var defMic = mics.FirstOrDefault(d => (d.DefaultRoles & 1) != 0) ?? mics.FirstOrDefault();
+                var defMic = (!string.IsNullOrEmpty(preferredMicId)
+                        ? mics.FirstOrDefault(d => string.Equals(d.Id, preferredMicId, StringComparison.OrdinalIgnoreCase))
+                        : null)
+                    ?? (!string.IsNullOrEmpty(preferredMicName)
+                        ? mics.FirstOrDefault(d => string.Equals(d.Name, preferredMicName, StringComparison.OrdinalIgnoreCase))
+                        : null)
+                    ?? mics.FirstOrDefault(d => (d.DefaultRoles & 1) != 0)
+                    ?? mics.FirstOrDefault();
                 if (defMic != null)
                 {
                     activeMicName = defMic.Name;
